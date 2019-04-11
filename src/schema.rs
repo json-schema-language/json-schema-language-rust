@@ -102,7 +102,24 @@ impl Registry {
 
             let mut mapping = HashMap::new();
             for (name, sub_schema) in discriminator.mapping {
-                mapping.insert(name, Self::first_pass(false, sub_schema)?);
+                let parsed = Self::first_pass(false, sub_schema)?;
+                match parsed.form {
+                    SchemaForm::Properties {
+                        ref required,
+                        ref optional,
+                    } => {
+                        if required.contains_key(&discriminator.tag)
+                            || optional.contains_key(&discriminator.tag)
+                        {
+                            return Ok(Err(ErrorKind::AmbiguousProperty)?);
+                        }
+                    }
+                    _ => {
+                        return Ok(Err(ErrorKind::AmbiguousProperty)?);
+                    }
+                }
+
+                mapping.insert(name, parsed);
             }
 
             form = SchemaForm::Discriminator {
@@ -163,6 +180,7 @@ pub enum PrimitiveType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::serde::SerdeDiscriminator;
 
     #[test]
     fn first_pass_root() {
@@ -359,18 +377,27 @@ mod tests {
 
     #[test]
     fn first_pass_discriminator_form() {
-        use crate::serde::SerdeDiscriminator;
-
         assert_eq!(
             Registry::first_pass(
                 true,
                 SerdeSchema {
                     discriminator: Some(SerdeDiscriminator {
                         tag: "foo".to_owned(),
-                        mapping: [("a".to_owned(), SerdeSchema::default())]
-                            .iter()
-                            .cloned()
-                            .collect(),
+                        mapping: [(
+                            "a".to_owned(),
+                            SerdeSchema {
+                                props: Some(
+                                    [("a".to_owned(), SerdeSchema::default())]
+                                        .iter()
+                                        .cloned()
+                                        .collect(),
+                                ),
+                                ..SerdeSchema::default()
+                            },
+                        )]
+                        .iter()
+                        .cloned()
+                        .collect(),
                     }),
                     ..SerdeSchema::default()
                 }
@@ -387,7 +414,20 @@ mod tests {
                         "a".to_owned(),
                         Schema {
                             root_data: None,
-                            form: SchemaForm::Empty,
+                            form: SchemaForm::Properties {
+                                required: [(
+                                    "a".to_owned(),
+                                    Schema {
+                                        root_data: None,
+                                        form: SchemaForm::Empty,
+                                        extra: HashMap::new(),
+                                    }
+                                )]
+                                .iter()
+                                .cloned()
+                                .collect(),
+                                optional: HashMap::new(),
+                            },
                             extra: HashMap::new(),
                         }
                     )]
@@ -398,5 +438,90 @@ mod tests {
                 extra: HashMap::new(),
             },
         );
+    }
+
+    #[test]
+    fn amibguous_props_form() {
+        let err = Registry::first_pass(
+            true,
+            SerdeSchema {
+                props: Some(
+                    [("a".to_owned(), SerdeSchema::default())]
+                        .iter()
+                        .cloned()
+                        .collect(),
+                ),
+                opt_props: Some(
+                    [("a".to_owned(), SerdeSchema::default())]
+                        .iter()
+                        .cloned()
+                        .collect(),
+                ),
+                ..SerdeSchema::default()
+            },
+        )
+        .expect_err("no error for ambiguous schema");
+
+        match err {
+            Error(ErrorKind::AmbiguousProperty, _) => {}
+            _ => panic!("wrong error produced"),
+        };
+    }
+
+    #[test]
+    fn ambiguous_discriminator_form_by_non_props() {
+        let err = Registry::first_pass(
+            true,
+            SerdeSchema {
+                discriminator: Some(SerdeDiscriminator {
+                    tag: "foo".to_owned(),
+                    mapping: [("a".to_owned(), SerdeSchema::default())]
+                        .iter()
+                        .cloned()
+                        .collect(),
+                }),
+                ..SerdeSchema::default()
+            },
+        )
+        .expect_err("no error for ambiguous schema");
+
+        match err {
+            Error(ErrorKind::AmbiguousProperty, _) => {}
+            _ => panic!("wrong error produced"),
+        };
+    }
+
+    #[test]
+    fn ambiguous_discriminator_form_by_props() {
+        let err = Registry::first_pass(
+            true,
+            SerdeSchema {
+                discriminator: Some(SerdeDiscriminator {
+                    tag: "foo".to_owned(),
+                    mapping: [(
+                        "a".to_owned(),
+                        SerdeSchema {
+                            props: Some(
+                                [("foo".to_owned(), SerdeSchema::default())]
+                                    .iter()
+                                    .cloned()
+                                    .collect(),
+                            ),
+                            ..SerdeSchema::default()
+                        },
+                    )]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                }),
+                ..SerdeSchema::default()
+            },
+        )
+        .expect_err("no error for ambiguous schema");
+
+        match err {
+            Error(ErrorKind::AmbiguousProperty, _) => {}
+            _ => panic!("wrong error produced"),
+        };
     }
 }
