@@ -8,12 +8,12 @@ pub struct SerdeSchema {
     pub id: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "ref")]
-    pub rxf: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "definitions")]
     pub defs: Option<HashMap<String, SerdeSchema>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ref")]
+    pub rxf: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "type")]
@@ -58,10 +58,10 @@ mod tests {
     fn roundtrip_json() {
         let data = r#"{
   "id": "http://example.com/foo",
-  "ref": "http://example.com/bar",
   "definitions": {
     "a": {}
   },
+  "ref": "http://example.com/bar",
   "type": "foo",
   "elements": {},
   "properties": {
