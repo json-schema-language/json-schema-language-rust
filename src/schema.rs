@@ -4,12 +4,48 @@ use serde_json::Value;
 use std::collections::HashMap;
 use url::Url;
 
+#[derive(Debug, PartialEq)]
 pub struct Registry {
     schemas: Vec<Schema>,
 }
 
 impl Registry {
-    pub fn register(schemas: SerdeSchema) -> Result<Vec<Url>> {
+    pub fn new() -> Registry {
+        Registry {
+            schemas: Vec::new(),
+        }
+    }
+
+    pub fn register<I: IntoIterator<Item = SerdeSchema>>(
+        &mut self,
+        schemas: I,
+    ) -> Result<Vec<Url>> {
+        let initial_size = self.schemas.len();
+
+        // To a first pass over all of the schemas.
+        for schema in schemas {
+            self.schemas.push(Self::first_pass(true, schema)?);
+        }
+
+        // With all of the schemas basically valid, let's ensure that all the
+        // URIs resolve properly, and precompute the resolved URIs for faster
+        // evaluation.
+        for (index, schema) in self.schemas.iter_mut().enumerate() {
+            let default_base = Url::parse(&format!("urn:random:{}", initial_size + index)).unwrap();
+            let base = schema
+                .root_data
+                .as_ref()
+                .and_then(|root| root.id.as_ref())
+                .unwrap_or(&default_base)
+                .clone();
+
+            for sub_schema in schema.root_data.unwrap().defs.values_mut() {
+                Self::second_pass(&base, sub_schema)?;
+            }
+
+            Self::second_pass(&base, schema)?;
+        }
+
         Ok(vec![])
     }
 
@@ -39,10 +75,9 @@ impl Registry {
 
         let mut form = SchemaForm::Empty;
         if let Some(rxf) = schema.rxf {
-            let uri = Url::parse(&rxf).chain_err(|| "failed to parse ref")?;
             form = SchemaForm::Ref {
-                uri,
-                resolvedUri: None,
+                uri: rxf,
+                resolved_uri: None,
             }
         }
 
@@ -134,6 +169,46 @@ impl Registry {
             extra: schema.extra,
         })
     }
+
+    fn second_pass(base: &Url, schema: &mut Schema) -> Result<()> {
+        match schema.form {
+            SchemaForm::Ref {
+                ref uri,
+                ref mut resolved_uri,
+            } => {
+                println!("resolving uri: {:?} {:?}", base, uri);
+                *resolved_uri = Some(base.join(uri).chain_err(|| "cannot resolve uri")?);
+            }
+            SchemaForm::Elements(ref mut elems) => {
+                Self::second_pass(base, elems)?;
+            }
+            SchemaForm::Properties {
+                ref mut required,
+                ref mut optional,
+            } => {
+                for sub_schema in required.values_mut() {
+                    Self::second_pass(base, sub_schema)?;
+                }
+
+                for sub_schema in optional.values_mut() {
+                    Self::second_pass(base, sub_schema)?;
+                }
+            }
+            SchemaForm::Values(ref mut values) => {
+                Self::second_pass(base, values)?;
+            }
+            SchemaForm::Discriminator {
+                ref mut mapping, ..
+            } => {
+                for sub_schema in mapping.values_mut() {
+                    Self::second_pass(base, sub_schema)?;
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -153,8 +228,8 @@ pub struct RootData {
 pub enum SchemaForm {
     Empty,
     Ref {
-        uri: Url,
-        resolvedUri: Option<Url>,
+        uri: String,
+        resolved_uri: Option<Url>,
     },
     Type(PrimitiveType),
     Elements(Box<Schema>),
@@ -237,8 +312,8 @@ mod tests {
                     defs: HashMap::new(),
                 }),
                 form: SchemaForm::Ref {
-                    uri: Url::parse("http://example.com/bar").unwrap(),
-                    resolvedUri: None,
+                    uri: "http://example.com/bar".to_owned(),
+                    resolved_uri: None,
                 },
                 extra: HashMap::new(),
             },
@@ -523,5 +598,90 @@ mod tests {
             Error(ErrorKind::AmbiguousProperty, _) => {}
             _ => panic!("wrong error produced"),
         };
+    }
+
+    #[test]
+    fn resolve_refs() {
+        let mut registry = Registry::new();
+        assert_eq!(
+            registry
+                .register(vec![
+                    SerdeSchema {
+                        id: Some("http://example.com/foo".to_owned()),
+                        defs: Some(
+                            [("a".to_owned(), SerdeSchema::default())]
+                                .iter()
+                                .cloned()
+                                .collect()
+                        ),
+                        rxf: Some("#a".to_owned()),
+                        ..SerdeSchema::default()
+                    },
+                    SerdeSchema {
+                        id: None,
+                        defs: Some(
+                            [("a".to_owned(), SerdeSchema{
+                                rxf: Some("#a".to_owned()),
+                                ..SerdeSchema::default()
+                            })]
+                                .iter()
+                                .cloned()
+                                .collect()
+                        ),
+                        rxf: Some("http://example.com/foo#a".to_owned()),
+                        ..SerdeSchema::default()
+                    }
+                ])
+                .expect("error while registering schema"),
+            vec![]
+        );
+
+        assert_eq!(
+            registry,
+            Registry {
+                schemas: vec![
+                    Schema {
+                        root_data: Some(RootData {
+                            id: Some(Url::parse("http://example.com/foo").unwrap()),
+                            defs: [(
+                                "a".to_owned(),
+                                Schema {
+                                    root_data: None,
+                                    form: SchemaForm::Empty,
+                                    extra: HashMap::new(),
+                                }
+                            ),
+                            (
+                                "b".to_owned(),
+                                Schema {
+                                    root_data: None,
+                                    form: SchemaForm::Empty,
+                                    extra: HashMap::new(),
+                                }
+                            )]
+                            .iter()
+                            .cloned()
+                            .collect(),
+                        }),
+                        form: SchemaForm::Ref {
+                            uri: "#a".to_owned(),
+                            resolved_uri: Some(Url::parse("http://example.com/foo#a").unwrap()),
+                        },
+                        extra: HashMap::new(),
+                    },
+                    Schema {
+                        root_data: Some(RootData {
+                            id: None,
+                            defs: HashMap::new(),
+                        }),
+                        form: SchemaForm::Ref {
+                            uri: "http://example.com/foo#a".to_owned(),
+                            resolved_uri: Some(Url::parse("http://example.com/foo#a").unwrap()),
+                        },
+                        extra: HashMap::new(),
+                    },
+                ]
+            }
+        );
     }
 }
