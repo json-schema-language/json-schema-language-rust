@@ -31,7 +31,7 @@ impl Registry {
         // URIs resolve properly, and precompute the resolved URIs for faster
         // evaluation.
         for (index, schema) in self.schemas.iter_mut().enumerate() {
-            let default_base = Url::parse(&format!("urn:random:{}", initial_size + index)).unwrap();
+            let default_base = Url::parse(&format!("urn:jsl:auto:{}", initial_size + index)).unwrap();
             let base = schema
                 .root_data
                 .as_ref()
@@ -39,7 +39,7 @@ impl Registry {
                 .unwrap_or(&default_base)
                 .clone();
 
-            for sub_schema in schema.root_data.unwrap().defs.values_mut() {
+            for sub_schema in schema.root_data.as_mut().unwrap().defs.values_mut() {
                 Self::second_pass(&base, sub_schema)?;
             }
 
@@ -651,14 +651,7 @@ mod tests {
                                     extra: HashMap::new(),
                                 }
                             ),
-                            (
-                                "b".to_owned(),
-                                Schema {
-                                    root_data: None,
-                                    form: SchemaForm::Empty,
-                                    extra: HashMap::new(),
-                                }
-                            )]
+                            ]
                             .iter()
                             .cloned()
                             .collect(),
@@ -672,7 +665,14 @@ mod tests {
                     Schema {
                         root_data: Some(RootData {
                             id: None,
-                            defs: HashMap::new(),
+                            defs: [("a".to_owned(), Schema{
+                                root_data: None,
+                                form: SchemaForm::Ref {
+                                    uri: "#a".to_owned(),
+                                    resolved_uri: Some(Url::parse("urn:jsl:auto:1#a").unwrap()),
+                                },
+                                    extra: HashMap::new(),
+                            })].iter().cloned().collect(),
                         }),
                         form: SchemaForm::Ref {
                             uri: "http://example.com/foo#a".to_owned(),
