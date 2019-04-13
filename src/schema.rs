@@ -31,7 +31,8 @@ impl Registry {
         // URIs resolve properly, and precompute the resolved URIs for faster
         // evaluation.
         for (index, schema) in self.schemas.iter_mut().enumerate() {
-            let default_base = Url::parse(&format!("urn:jsl:auto:{}", initial_size + index)).unwrap();
+            let default_base =
+                Url::parse(&format!("urn:jsl:auto:{}", initial_size + index)).unwrap();
             let base = schema
                 .root_data
                 .as_ref()
@@ -46,7 +47,12 @@ impl Registry {
             Self::second_pass(&base, schema)?;
         }
 
-        Ok(vec![])
+        let mut missing_uris = Vec::new();
+        for schema in &self.schemas {
+            Self::third_pass(&mut missing_uris, &self.schemas, schema);
+        }
+
+        Ok(missing_uris)
     }
 
     fn first_pass(is_root: bool, schema: SerdeSchema) -> Result<Schema> {
@@ -208,6 +214,63 @@ impl Registry {
         }
 
         Ok(())
+    }
+
+    fn third_pass(missing_uris: &mut Vec<Url>, schemas: &[Schema], schema: &Schema) {
+        match schema.form {
+            SchemaForm::Ref {
+                ref resolved_uri, ..
+            } => {
+                let uri = resolved_uri.as_ref().unwrap();
+                let uri_fragment = uri.fragment();
+                let mut found = false;
+
+                let mut uri_absolute = uri.clone();
+                uri_absolute.set_fragment(None);
+
+                for schema in schemas {
+                    if let Some(id) = schema.root_data.as_ref().unwrap().id.as_ref() {
+                        if id == &uri_absolute {
+                            found = true;
+
+                            if let Some(frag) = uri_fragment {
+                                if !schema.root_data.as_ref().unwrap().defs.contains_key(frag) {
+                                    missing_uris.push(uri.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !found {
+                    missing_uris.push(uri.clone());
+                }
+            }
+            SchemaForm::Elements(ref elems) => {
+                Self::third_pass(missing_uris, schemas, elems);
+            }
+            SchemaForm::Properties {
+                ref required,
+                ref optional,
+            } => {
+                for sub_schema in required.values() {
+                    Self::third_pass(missing_uris, schemas, sub_schema);
+                }
+
+                for sub_schema in optional.values() {
+                    Self::third_pass(missing_uris, schemas, sub_schema);
+                }
+            }
+            SchemaForm::Values(ref values) => {
+                Self::third_pass(missing_uris, schemas, values);
+            }
+            SchemaForm::Discriminator { ref mapping, .. } => {
+                for sub_schema in mapping.values() {
+                    Self::third_pass(missing_uris, schemas, sub_schema);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -620,13 +683,16 @@ mod tests {
                     SerdeSchema {
                         id: None,
                         defs: Some(
-                            [("a".to_owned(), SerdeSchema{
-                                rxf: Some("#a".to_owned()),
-                                ..SerdeSchema::default()
-                            })]
-                                .iter()
-                                .cloned()
-                                .collect()
+                            [(
+                                "a".to_owned(),
+                                SerdeSchema {
+                                    rxf: Some("#a".to_owned()),
+                                    ..SerdeSchema::default()
+                                }
+                            )]
+                            .iter()
+                            .cloned()
+                            .collect()
                         ),
                         rxf: Some("http://example.com/foo#a".to_owned()),
                         ..SerdeSchema::default()
@@ -650,8 +716,7 @@ mod tests {
                                     form: SchemaForm::Empty,
                                     extra: HashMap::new(),
                                 }
-                            ),
-                            ]
+                            ),]
                             .iter()
                             .cloned()
                             .collect(),
@@ -665,14 +730,20 @@ mod tests {
                     Schema {
                         root_data: Some(RootData {
                             id: None,
-                            defs: [("a".to_owned(), Schema{
-                                root_data: None,
-                                form: SchemaForm::Ref {
-                                    uri: "#a".to_owned(),
-                                    resolved_uri: Some(Url::parse("urn:jsl:auto:1#a").unwrap()),
-                                },
+                            defs: [(
+                                "a".to_owned(),
+                                Schema {
+                                    root_data: None,
+                                    form: SchemaForm::Ref {
+                                        uri: "#a".to_owned(),
+                                        resolved_uri: Some(Url::parse("urn:jsl:auto:1#a").unwrap()),
+                                    },
                                     extra: HashMap::new(),
-                            })].iter().cloned().collect(),
+                                }
+                            )]
+                            .iter()
+                            .cloned()
+                            .collect(),
                         }),
                         form: SchemaForm::Ref {
                             uri: "http://example.com/foo#a".to_owned(),
@@ -682,6 +753,49 @@ mod tests {
                     },
                 ]
             }
+        );
+    }
+
+    #[test]
+    fn resolve_refs_missing_uris() {
+        let mut registry = Registry::new();
+        assert_eq!(
+            registry
+                .register(vec![
+                    SerdeSchema {
+                        id: Some("http://example.com/foo".to_owned()),
+                        defs: Some(
+                            [("a".to_owned(), SerdeSchema::default())]
+                                .iter()
+                                .cloned()
+                                .collect()
+                        ),
+                        rxf: Some("#b".to_owned()),
+                        ..SerdeSchema::default()
+                    },
+                    SerdeSchema {
+                        id: None,
+                        defs: Some(
+                            [(
+                                "a".to_owned(),
+                                SerdeSchema {
+                                    rxf: Some("#a".to_owned()),
+                                    ..SerdeSchema::default()
+                                }
+                            )]
+                            .iter()
+                            .cloned()
+                            .collect()
+                        ),
+                        rxf: Some("http://example.com/foo#c".to_owned()),
+                        ..SerdeSchema::default()
+                    }
+                ])
+                .expect("error while registering schema"),
+            vec![
+                Url::parse("http://example.com/foo#b").unwrap(),
+                Url::parse("http://example.com/foo#c").unwrap(),
+            ]
         );
     }
 }
