@@ -10,3 +10,6 @@ serde_json = "1.0"
 url = "1.0"
 error-chain = "0.12"
 json-pointer = "0.3"
+
+[dev-dependencies]
+pretty_assertions = "0.6"

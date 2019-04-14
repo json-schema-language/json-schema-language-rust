@@ -8,7 +8,7 @@ use url::Url;
 
 #[derive(Debug, PartialEq)]
 pub struct Registry {
-    schemas: Vec<Schema>,
+    schemas: HashMap<Option<Url>, Schema>,
 }
 
 // pub struct ValidationResult {
@@ -24,7 +24,7 @@ pub struct ValidationFailure {
 impl Registry {
     pub fn new() -> Registry {
         Registry {
-            schemas: Vec::new(),
+            schemas: HashMap::new(),
         }
     }
 
@@ -40,15 +40,16 @@ impl Registry {
 
         // To a first pass over all of the schemas.
         for schema in schemas {
-            self.schemas.push(Self::first_pass(true, schema)?);
+            let schema = Self::first_pass(true, schema)?;
+            self.schemas
+                .insert(schema.root_data.as_ref().unwrap().id.clone(), schema);
         }
 
         // With all of the schemas basically valid, let's ensure that all the
         // URIs resolve properly, and precompute the resolved URIs for faster
         // evaluation.
-        for (index, schema) in self.schemas.iter_mut().enumerate() {
-            let default_base =
-                Url::parse(&format!("urn:jsl:auto:{}", initial_size + index)).unwrap();
+        for (_, schema) in self.schemas.values_mut().enumerate() {
+            let default_base = Url::parse(&format!("urn:jsl:auto:{}", initial_size)).unwrap();
             let base = schema
                 .root_data
                 .as_ref()
@@ -64,7 +65,7 @@ impl Registry {
         }
 
         let mut missing_uris = Vec::new();
-        for schema in &self.schemas {
+        for schema in self.schemas.values() {
             Self::third_pass(&mut missing_uris, &self.schemas, schema, schema);
         }
 
@@ -234,7 +235,7 @@ impl Registry {
 
     fn third_pass(
         missing_uris: &mut Vec<Url>,
-        schemas: &[Schema],
+        schemas: &HashMap<Option<Url>, Schema>,
         root_schema: &Schema,
         schema: &Schema,
     ) {
@@ -272,7 +273,7 @@ impl Registry {
                     }
                 } else {
                     let mut found = false;
-                    for schema in schemas {
+                    for schema in schemas.values() {
                         if let Some(id) = schema.root_data.as_ref().unwrap().id.as_ref() {
                             if id == &uri_absolute {
                                 found = true;
@@ -371,6 +372,7 @@ pub enum PrimitiveType {
 mod tests {
     use super::*;
     use crate::serde::SerdeDiscriminator;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn first_pass_root() {
@@ -758,52 +760,63 @@ mod tests {
             registry,
             Registry {
                 schemas: vec![
-                    Schema {
-                        root_data: Some(RootData {
-                            id: Some(Url::parse("http://example.com/foo").unwrap()),
-                            defs: [(
-                                "a".to_owned(),
-                                Schema {
-                                    root_data: None,
-                                    form: SchemaForm::Empty,
-                                    extra: HashMap::new(),
-                                }
-                            ),]
-                            .iter()
-                            .cloned()
-                            .collect(),
-                        }),
-                        form: SchemaForm::Ref {
-                            uri: "#a".to_owned(),
-                            resolved_uri: Some(Url::parse("http://example.com/foo#a").unwrap()),
+                    (
+                        Some(Url::parse("http://example.com/foo").unwrap()),
+                        Schema {
+                            root_data: Some(RootData {
+                                id: Some(Url::parse("http://example.com/foo").unwrap()),
+                                defs: [(
+                                    "a".to_owned(),
+                                    Schema {
+                                        root_data: None,
+                                        form: SchemaForm::Empty,
+                                        extra: HashMap::new(),
+                                    }
+                                )]
+                                .iter()
+                                .cloned()
+                                .collect(),
+                            }),
+                            form: SchemaForm::Ref {
+                                uri: "#a".to_owned(),
+                                resolved_uri: Some(Url::parse("http://example.com/foo#a").unwrap()),
+                            },
+                            extra: HashMap::new(),
                         },
-                        extra: HashMap::new(),
-                    },
-                    Schema {
-                        root_data: Some(RootData {
-                            id: None,
-                            defs: [(
-                                "a".to_owned(),
-                                Schema {
-                                    root_data: None,
-                                    form: SchemaForm::Ref {
-                                        uri: "#a".to_owned(),
-                                        resolved_uri: Some(Url::parse("urn:jsl:auto:1#a").unwrap()),
-                                    },
-                                    extra: HashMap::new(),
-                                }
-                            )]
-                            .iter()
-                            .cloned()
-                            .collect(),
-                        }),
-                        form: SchemaForm::Ref {
-                            uri: "http://example.com/foo#a".to_owned(),
-                            resolved_uri: Some(Url::parse("http://example.com/foo#a").unwrap()),
+                    ),
+                    (
+                        None,
+                        Schema {
+                            root_data: Some(RootData {
+                                id: None,
+                                defs: [(
+                                    "a".to_owned(),
+                                    Schema {
+                                        root_data: None,
+                                        form: SchemaForm::Ref {
+                                            uri: "#a".to_owned(),
+                                            resolved_uri: Some(
+                                                Url::parse("urn:jsl:auto:0#a").unwrap()
+                                            ),
+                                        },
+                                        extra: HashMap::new(),
+                                    }
+                                )]
+                                .iter()
+                                .cloned()
+                                .collect(),
+                            }),
+                            form: SchemaForm::Ref {
+                                uri: "http://example.com/foo#a".to_owned(),
+                                resolved_uri: Some(Url::parse("http://example.com/foo#a").unwrap()),
+                            },
+                            extra: HashMap::new(),
                         },
-                        extra: HashMap::new(),
-                    },
+                    ),
                 ]
+                .iter()
+                .cloned()
+                .collect()
             }
         );
     }
