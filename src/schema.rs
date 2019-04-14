@@ -1,5 +1,7 @@
 use crate::errors::*;
 use crate::serde::SerdeSchema;
+use crate::vm::validate;
+use json_pointer::JsonPointer;
 use serde_json::Value;
 use std::collections::HashMap;
 use url::Url;
@@ -9,11 +11,25 @@ pub struct Registry {
     schemas: Vec<Schema>,
 }
 
+// pub struct ValidationResult {
+//     pub failures: Vec<ValidationFailure>,
+// }
+
+pub struct ValidationFailure {
+    pub instance_path: JsonPointer<String, Vec<String>>,
+    pub schema_path: JsonPointer<String, Vec<String>>,
+    pub schema_uri: Option<Url>,
+}
+
 impl Registry {
     pub fn new() -> Registry {
         Registry {
             schemas: Vec::new(),
         }
+    }
+
+    pub fn validate(&self, instance: Value) -> Vec<ValidationFailure> {
+        Vec::new()
     }
 
     pub fn register<I: IntoIterator<Item = SerdeSchema>>(
@@ -49,7 +65,7 @@ impl Registry {
 
         let mut missing_uris = Vec::new();
         for schema in &self.schemas {
-            Self::third_pass(&mut missing_uris, &self.schemas, schema);
+            Self::third_pass(&mut missing_uris, &self.schemas, schema, schema);
         }
 
         Ok(missing_uris)
@@ -216,57 +232,93 @@ impl Registry {
         Ok(())
     }
 
-    fn third_pass(missing_uris: &mut Vec<Url>, schemas: &[Schema], schema: &Schema) {
+    fn third_pass(
+        missing_uris: &mut Vec<Url>,
+        schemas: &[Schema],
+        root_schema: &Schema,
+        schema: &Schema,
+    ) {
         match schema.form {
             SchemaForm::Ref {
-                ref resolved_uri, ..
+                ref resolved_uri,
+                ref uri,
             } => {
-                let uri = resolved_uri.as_ref().unwrap();
-                let uri_fragment = uri.fragment();
-                let mut found = false;
+                let ref_uri = resolved_uri.as_ref().unwrap();
+                let ref_uri_frag = ref_uri.fragment();
 
-                let mut uri_absolute = uri.clone();
+                let mut uri_absolute = ref_uri.clone();
                 uri_absolute.set_fragment(None);
 
-                for schema in schemas {
-                    if let Some(id) = schema.root_data.as_ref().unwrap().id.as_ref() {
-                        if id == &uri_absolute {
-                            found = true;
+                // This is a janky way to detect URIs that are intra-document --
+                // i.e., just a fragment. These references always resolve to a
+                // root schema, even if the root schema lacks an ID.
+                //
+                // The case of a schema referring to itself using its "public"
+                // ID is handled by the case below.
+                if uri.starts_with("#") {
+                    println!("URI is intra!");
 
-                            if let Some(frag) = uri_fragment {
-                                if !schema.root_data.as_ref().unwrap().defs.contains_key(frag) {
-                                    missing_uris.push(uri.clone());
+                    if let Some(frag) = ref_uri_frag {
+                        if !frag.is_empty()
+                            && !root_schema
+                                .root_data
+                                .as_ref()
+                                .unwrap()
+                                .defs
+                                .contains_key(frag)
+                        {
+                            missing_uris.push(ref_uri.clone());
+                        }
+                    }
+                } else {
+                    let mut found = false;
+                    for schema in schemas {
+                        if let Some(id) = schema.root_data.as_ref().unwrap().id.as_ref() {
+                            if id == &uri_absolute {
+                                found = true;
+
+                                if let Some(frag) = ref_uri_frag {
+                                    if !frag.is_empty()
+                                        && !schema
+                                            .root_data
+                                            .as_ref()
+                                            .unwrap()
+                                            .defs
+                                            .contains_key(frag)
+                                    {
+                                        missing_uris.push(ref_uri.clone());
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                if !found {
-                    missing_uris.push(uri.clone());
+                    if !found {
+                        missing_uris.push(ref_uri.clone());
+                    }
                 }
             }
             SchemaForm::Elements(ref elems) => {
-                Self::third_pass(missing_uris, schemas, elems);
+                Self::third_pass(missing_uris, schemas, root_schema, elems);
             }
             SchemaForm::Properties {
                 ref required,
                 ref optional,
             } => {
                 for sub_schema in required.values() {
-                    Self::third_pass(missing_uris, schemas, sub_schema);
+                    Self::third_pass(missing_uris, schemas, root_schema, sub_schema);
                 }
 
                 for sub_schema in optional.values() {
-                    Self::third_pass(missing_uris, schemas, sub_schema);
+                    Self::third_pass(missing_uris, schemas, root_schema, sub_schema);
                 }
             }
             SchemaForm::Values(ref values) => {
-                Self::third_pass(missing_uris, schemas, values);
+                Self::third_pass(missing_uris, schemas, root_schema, values);
             }
             SchemaForm::Discriminator { ref mapping, .. } => {
                 for sub_schema in mapping.values() {
-                    Self::third_pass(missing_uris, schemas, sub_schema);
+                    Self::third_pass(missing_uris, schemas, root_schema, sub_schema);
                 }
             }
             _ => {}
