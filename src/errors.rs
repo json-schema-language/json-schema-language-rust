@@ -8,5 +8,6 @@ error_chain! {
   errors {
     InvalidForm
     AmbiguousProperty
+    NoSuchDefinition
   }
 }

@@ -49,24 +49,27 @@ impl Registry {
         // URIs resolve properly, and precompute the resolved URIs for faster
         // evaluation.
         for (_, schema) in self.schemas.values_mut().enumerate() {
-            let default_base = Url::parse(&format!("urn:jsl:auto:{}", initial_size)).unwrap();
-            let base = schema
-                .root_data
-                .as_ref()
-                .and_then(|root| root.id.as_ref())
-                .unwrap_or(&default_base)
-                .clone();
+            // let default_base = Url::parse(&format!("urn:jsl:auto:{}", initial_size)).unwrap();
+            // let base = schema.root_data.and_then(|root| root.id);
+            let base = if let Some(ref root) = schema.root_data {
+                root.id.clone()
+            } else {
+                None
+            };
+
+            // .unwrap_or(&default_base)
+            // .clone();
 
             for sub_schema in schema.root_data.as_mut().unwrap().defs.values_mut() {
-                Self::second_pass(&base, sub_schema)?;
+                Self::second_pass(base.as_ref(), sub_schema)?;
             }
 
-            Self::second_pass(&base, schema)?;
+            Self::second_pass(base.as_ref(), schema)?;
         }
 
         let mut missing_uris = Vec::new();
         for schema in self.schemas.values() {
-            Self::third_pass(&mut missing_uris, &self.schemas, schema, schema);
+            Self::third_pass(&mut missing_uris, &self.schemas, schema, schema)?;
         }
 
         Ok(missing_uris)
@@ -100,7 +103,8 @@ impl Registry {
         if let Some(rxf) = schema.rxf {
             form = SchemaForm::Ref {
                 uri: rxf,
-                resolved_uri: None,
+                resolved_schema_id: None,
+                resolved_schema_def: None,
             }
         }
 
@@ -193,14 +197,39 @@ impl Registry {
         })
     }
 
-    fn second_pass(base: &Url, schema: &mut Schema) -> Result<()> {
+    fn second_pass(base: Option<&Url>, schema: &mut Schema) -> Result<()> {
         match schema.form {
             SchemaForm::Ref {
                 ref uri,
-                ref mut resolved_uri,
+                ref mut resolved_schema_id,
+                ref mut resolved_schema_def,
             } => {
-                println!("resolving uri: {:?} {:?}", base, uri);
-                *resolved_uri = Some(base.join(uri).chain_err(|| "cannot resolve uri")?);
+                // The url crate does not handle parsing relative references. We
+                // therefore handle valid cases of relative references directly
+                // here.
+                if uri == "" || uri == "#" {
+                    *resolved_schema_id = None; // indicates "same-document"
+                    *resolved_schema_def = None; // indicates "root"
+                } else if uri.starts_with("#") {
+                    *resolved_schema_id = None; // indicates "same-document"
+                    *resolved_schema_def = Some(uri[1..].to_owned());
+                } else {
+                    let mut resolved = if let Some(base) = base {
+                        base.join(uri).chain_err(|| "cannot resolve uri")?
+                    } else {
+                        Url::parse(uri).chain_err(|| "cannot resolve uri")?
+                    };
+
+                    *resolved_schema_def = resolved.fragment().and_then(|f| {
+                        if f == "" {
+                            None
+                        } else {
+                            Some(f.to_owned())
+                        }
+                    });
+                    resolved.set_fragment(None);
+                    *resolved_schema_id = Some(resolved);
+                }
             }
             SchemaForm::Elements(ref mut elems) => {
                 Self::second_pass(base, elems)?;
@@ -238,92 +267,120 @@ impl Registry {
         schemas: &HashMap<Option<Url>, Schema>,
         root_schema: &Schema,
         schema: &Schema,
-    ) {
+    ) -> Result<()> {
         match schema.form {
             SchemaForm::Ref {
-                ref resolved_uri,
+                ref resolved_schema_id,
+                ref resolved_schema_def,
                 ref uri,
+                // ref resolved_uri,
+                // ref uri,
             } => {
-                let ref_uri = resolved_uri.as_ref().unwrap();
-                let ref_uri_frag = ref_uri.fragment();
-
-                let mut uri_absolute = ref_uri.clone();
-                uri_absolute.set_fragment(None);
-
-                // This is a janky way to detect URIs that are intra-document --
-                // i.e., just a fragment. These references always resolve to a
-                // root schema, even if the root schema lacks an ID.
-                //
-                // The case of a schema referring to itself using its "public"
-                // ID is handled by the case below.
-                if uri.starts_with("#") {
-                    println!("URI is intra!");
-
-                    if let Some(frag) = ref_uri_frag {
-                        if !frag.is_empty()
-                            && !root_schema
-                                .root_data
-                                .as_ref()
-                                .unwrap()
-                                .defs
-                                .contains_key(frag)
-                        {
-                            missing_uris.push(ref_uri.clone());
-                        }
+                let resolved_schema = if let Some(id) = resolved_schema_id {
+                    if let Some(s) = schemas.get(resolved_schema_id) {
+                        s
+                    } else {
+                        missing_uris.push(id.clone());
+                        return Ok(());
                     }
                 } else {
-                    let mut found = false;
-                    for schema in schemas.values() {
-                        if let Some(id) = schema.root_data.as_ref().unwrap().id.as_ref() {
-                            if id == &uri_absolute {
-                                found = true;
+                    schema
+                };
 
-                                if let Some(frag) = ref_uri_frag {
-                                    if !frag.is_empty()
-                                        && !schema
-                                            .root_data
-                                            .as_ref()
-                                            .unwrap()
-                                            .defs
-                                            .contains_key(frag)
-                                    {
-                                        missing_uris.push(ref_uri.clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if !found {
-                        missing_uris.push(ref_uri.clone());
+                if let Some(def) = resolved_schema_def {
+                    if !resolved_schema
+                        .root_data
+                        .as_ref()
+                        .unwrap()
+                        .defs
+                        .contains_key(def)
+                    {
+                        return Ok(Err(ErrorKind::NoSuchDefinition)?);
                     }
                 }
+
+                // let ref_uri = resolved_uri.as_ref().unwrap();
+                // let ref_uri_frag = ref_uri.fragment();
+
+                // let mut uri_absolute = ref_uri.clone();
+                // uri_absolute.set_fragment(None);
+
+                // // This is a janky way to detect URIs that are intra-document --
+                // // i.e., just a fragment. These references always resolve to a
+                // // root schema, even if the root schema lacks an ID.
+                // //
+                // // The case of a schema referring to itself using its "public"
+                // // ID is handled by the case below.
+                // if uri.starts_with("#") {
+                //     println!("URI is intra!");
+
+                //     if let Some(frag) = ref_uri_frag {
+                //         if !frag.is_empty()
+                //             && !root_schema
+                //                 .root_data
+                //                 .as_ref()
+                //                 .unwrap()
+                //                 .defs
+                //                 .contains_key(frag)
+                //         {
+                //             missing_uris.push(ref_uri.clone());
+                //         }
+                //     }
+                // } else {
+                //     let mut found = false;
+                //     for schema in schemas.values() {
+                //         if let Some(id) = schema.root_data.as_ref().unwrap().id.as_ref() {
+                //             if id == &uri_absolute {
+                //                 found = true;
+
+                //                 if let Some(frag) = ref_uri_frag {
+                //                     if !frag.is_empty()
+                //                         && !schema
+                //                             .root_data
+                //                             .as_ref()
+                //                             .unwrap()
+                //                             .defs
+                //                             .contains_key(frag)
+                //                     {
+                //                         missing_uris.push(ref_uri.clone());
+                //                     }
+                //                 }
+                //             }
+                //         }
+                //     }
+
+                //     if !found {
+                //         missing_uris.push(ref_uri.clone());
+                //     }
+                // }
             }
             SchemaForm::Elements(ref elems) => {
-                Self::third_pass(missing_uris, schemas, root_schema, elems);
+                Self::third_pass(missing_uris, schemas, root_schema, elems)?;
             }
             SchemaForm::Properties {
                 ref required,
                 ref optional,
             } => {
                 for sub_schema in required.values() {
-                    Self::third_pass(missing_uris, schemas, root_schema, sub_schema);
+                    Self::third_pass(missing_uris, schemas, root_schema, sub_schema)?;
                 }
 
                 for sub_schema in optional.values() {
-                    Self::third_pass(missing_uris, schemas, root_schema, sub_schema);
+                    Self::third_pass(missing_uris, schemas, root_schema, sub_schema)?;
                 }
             }
             SchemaForm::Values(ref values) => {
-                Self::third_pass(missing_uris, schemas, root_schema, values);
+                Self::third_pass(missing_uris, schemas, root_schema, values)?;
             }
             SchemaForm::Discriminator { ref mapping, .. } => {
                 for sub_schema in mapping.values() {
-                    Self::third_pass(missing_uris, schemas, root_schema, sub_schema);
+                    Self::third_pass(missing_uris, schemas, root_schema, sub_schema)?;
                 }
             }
             _ => {}
         }
+
+        Ok(())
     }
 }
 
@@ -345,7 +402,8 @@ pub enum SchemaForm {
     Empty,
     Ref {
         uri: String,
-        resolved_uri: Option<Url>,
+        resolved_schema_id: Option<Url>,
+        resolved_schema_def: Option<String>,
     },
     Type(PrimitiveType),
     Elements(Box<Schema>),
@@ -430,7 +488,8 @@ mod tests {
                 }),
                 form: SchemaForm::Ref {
                     uri: "http://example.com/bar".to_owned(),
-                    resolved_uri: None,
+                    resolved_schema_id: None,
+                    resolved_schema_def: None,
                 },
                 extra: HashMap::new(),
             },
@@ -779,7 +838,8 @@ mod tests {
                             }),
                             form: SchemaForm::Ref {
                                 uri: "#a".to_owned(),
-                                resolved_uri: Some(Url::parse("http://example.com/foo#a").unwrap()),
+                                resolved_schema_id: None,
+                                resolved_schema_def: Some("a".to_owned()),
                             },
                             extra: HashMap::new(),
                         },
@@ -795,9 +855,8 @@ mod tests {
                                         root_data: None,
                                         form: SchemaForm::Ref {
                                             uri: "#a".to_owned(),
-                                            resolved_uri: Some(
-                                                Url::parse("urn:jsl:auto:0#a").unwrap()
-                                            ),
+                                            resolved_schema_id: None,
+                                            resolved_schema_def: Some("a".to_owned()),
                                         },
                                         extra: HashMap::new(),
                                     }
@@ -808,7 +867,10 @@ mod tests {
                             }),
                             form: SchemaForm::Ref {
                                 uri: "http://example.com/foo#a".to_owned(),
-                                resolved_uri: Some(Url::parse("http://example.com/foo#a").unwrap()),
+                                resolved_schema_id: Some(
+                                    Url::parse("http://example.com/foo").unwrap()
+                                ),
+                                resolved_schema_def: Some("a".to_owned()),
                             },
                             extra: HashMap::new(),
                         },
@@ -826,41 +888,19 @@ mod tests {
         let mut registry = Registry::new();
         assert_eq!(
             registry
-                .register(vec![
-                    SerdeSchema {
-                        id: Some("http://example.com/foo".to_owned()),
-                        defs: Some(
-                            [("a".to_owned(), SerdeSchema::default())]
-                                .iter()
-                                .cloned()
-                                .collect()
-                        ),
-                        rxf: Some("#b".to_owned()),
-                        ..SerdeSchema::default()
-                    },
-                    SerdeSchema {
-                        id: None,
-                        defs: Some(
-                            [(
-                                "a".to_owned(),
-                                SerdeSchema {
-                                    rxf: Some("#a".to_owned()),
-                                    ..SerdeSchema::default()
-                                }
-                            )]
+                .register(vec![SerdeSchema {
+                    id: Some("http://example.com/foo".to_owned()),
+                    defs: Some(
+                        [("a".to_owned(), SerdeSchema::default())]
                             .iter()
                             .cloned()
                             .collect()
-                        ),
-                        rxf: Some("http://example.com/foo#c".to_owned()),
-                        ..SerdeSchema::default()
-                    }
-                ])
+                    ),
+                    rxf: Some("http://example.com/bar".to_owned()),
+                    ..SerdeSchema::default()
+                },])
                 .expect("error while registering schema"),
-            vec![
-                Url::parse("http://example.com/foo#b").unwrap(),
-                Url::parse("http://example.com/foo#c").unwrap(),
-            ]
+            vec![Url::parse("http://example.com/bar").unwrap(),]
         );
     }
 }
