@@ -11,10 +11,6 @@ pub struct Registry {
     schemas: HashMap<Option<Url>, Schema>,
 }
 
-// pub struct ValidationResult {
-//     pub failures: Vec<ValidationFailure>,
-// }
-
 pub struct ValidationFailure {
     pub instance_path: JsonPointer<String, Vec<String>>,
     pub schema_path: JsonPointer<String, Vec<String>>,
@@ -36,9 +32,8 @@ impl Registry {
         &mut self,
         schemas: I,
     ) -> Result<Vec<Url>> {
-        let initial_size = self.schemas.len();
-
-        // To a first pass over all of the schemas.
+        // Do a first pass to ensure the basic structural validity of the
+        // schemas.
         for schema in schemas {
             let schema = Self::first_pass(true, schema)?;
             self.schemas
@@ -48,17 +43,12 @@ impl Registry {
         // With all of the schemas basically valid, let's ensure that all the
         // URIs resolve properly, and precompute the resolved URIs for faster
         // evaluation.
-        for (_, schema) in self.schemas.values_mut().enumerate() {
-            // let default_base = Url::parse(&format!("urn:jsl:auto:{}", initial_size)).unwrap();
-            // let base = schema.root_data.and_then(|root| root.id);
+        for schema in self.schemas.values_mut() {
             let base = if let Some(ref root) = schema.root_data {
                 root.id.clone()
             } else {
                 None
             };
-
-            // .unwrap_or(&default_base)
-            // .clone();
 
             for sub_schema in schema.root_data.as_mut().unwrap().defs.values_mut() {
                 Self::second_pass(base.as_ref(), sub_schema)?;
@@ -67,6 +57,8 @@ impl Registry {
             Self::second_pass(base.as_ref(), schema)?;
         }
 
+        // With all possible cross-references computed, now do a final pass to
+        // see if any of the cross-references fail to resolve.
         let mut missing_uris = Vec::new();
         for schema in self.schemas.values() {
             Self::third_pass(&mut missing_uris, &self.schemas, schema, schema)?;
@@ -272,9 +264,7 @@ impl Registry {
             SchemaForm::Ref {
                 ref resolved_schema_id,
                 ref resolved_schema_def,
-                ref uri,
-                // ref resolved_uri,
-                // ref uri,
+                ..
             } => {
                 let resolved_schema = if let Some(id) = resolved_schema_id {
                     if let Some(s) = schemas.get(resolved_schema_id) {
@@ -298,61 +288,6 @@ impl Registry {
                         return Ok(Err(ErrorKind::NoSuchDefinition)?);
                     }
                 }
-
-                // let ref_uri = resolved_uri.as_ref().unwrap();
-                // let ref_uri_frag = ref_uri.fragment();
-
-                // let mut uri_absolute = ref_uri.clone();
-                // uri_absolute.set_fragment(None);
-
-                // // This is a janky way to detect URIs that are intra-document --
-                // // i.e., just a fragment. These references always resolve to a
-                // // root schema, even if the root schema lacks an ID.
-                // //
-                // // The case of a schema referring to itself using its "public"
-                // // ID is handled by the case below.
-                // if uri.starts_with("#") {
-                //     println!("URI is intra!");
-
-                //     if let Some(frag) = ref_uri_frag {
-                //         if !frag.is_empty()
-                //             && !root_schema
-                //                 .root_data
-                //                 .as_ref()
-                //                 .unwrap()
-                //                 .defs
-                //                 .contains_key(frag)
-                //         {
-                //             missing_uris.push(ref_uri.clone());
-                //         }
-                //     }
-                // } else {
-                //     let mut found = false;
-                //     for schema in schemas.values() {
-                //         if let Some(id) = schema.root_data.as_ref().unwrap().id.as_ref() {
-                //             if id == &uri_absolute {
-                //                 found = true;
-
-                //                 if let Some(frag) = ref_uri_frag {
-                //                     if !frag.is_empty()
-                //                         && !schema
-                //                             .root_data
-                //                             .as_ref()
-                //                             .unwrap()
-                //                             .defs
-                //                             .contains_key(frag)
-                //                     {
-                //                         missing_uris.push(ref_uri.clone());
-                //                     }
-                //                 }
-                //             }
-                //         }
-                //     }
-
-                //     if !found {
-                //         missing_uris.push(ref_uri.clone());
-                //     }
-                // }
             }
             SchemaForm::Elements(ref elems) => {
                 Self::third_pass(missing_uris, schemas, root_schema, elems)?;
