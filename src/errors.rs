@@ -4,7 +4,7 @@ use failure::Fail;
 use url::Url;
 
 /// An enum of possible errors that can emerge from this crate.
-#[derive(Debug, Fail)]
+#[derive(Debug, Fail, PartialEq)]
 pub enum JslError {
   /// A schema-like object did not take on a valid form.
   ///
@@ -31,8 +31,30 @@ pub enum JslError {
   /// schema's definition, but that schema is already in a `Registry` and lacks
   /// such a definition, then the reference cannot be resolved, and this error
   /// is thrown.
-  #[fail(display = "no definition: {} for schema with id: {}", definition, id)]
-  NoSuchDefinition { id: Url, definition: String },
+  #[fail(display = "no definition: {} for schema with id: {:?}", definition, id)]
+  NoSuchDefinition { id: Option<Url>, definition: String },
+
+  /// A schema attempts to refer to something relative to its ID, but it has no
+  /// ID.
+  ///
+  /// JSL resolves inter-schema references using the usual rules for URIs, where
+  /// the `id` of a schema is used as the base URI for all `ref`s within that
+  /// schema. But if a schema lacks an `id`, then references must either be
+  /// *only* a fragment, or be an absolute URI. Otherwise, there's no meaningful
+  /// way to resolve the reference.
+  ///
+  /// An example of one such unresolvable reference would be:
+  ///
+  /// ```json
+  /// {
+  ///     "ref": "/foo"
+  /// }
+  /// ```
+  ///
+  /// There's no way to resolve `/foo` without having a base URI, but the schema
+  /// doesn't have a base URI to work from.
+  #[fail(display = "relative reference in an anonymous schema")]
+  RelativeRefFromAnonymousSchema,
 
   /// A non-root schema was given to a function which expected a root schema.
   #[fail(display = "non-root schema given when root schema was required")]

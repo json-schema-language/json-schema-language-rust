@@ -5,6 +5,7 @@
 //! representation of JSL schemas.
 
 use crate::errors::JslError;
+use failure::{bail, Error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -17,6 +18,7 @@ use url::Url;
 /// schemas, instead use [`SerdeSchema`](struct.SerdeSchema.html). `Schema` and
 /// `SerdeSchema` can be converted between each other within the context of a
 /// `Registry`.
+#[derive(Clone, PartialEq, Debug)]
 pub struct Schema {
     root: Option<RootData>,
     form: Box<Form>,
@@ -24,9 +26,167 @@ pub struct Schema {
 }
 
 impl Schema {
+    /// Construct a new, non-root, empty-form schema without any extra data.
+    pub fn new_empty() -> Schema {
+        Schema {
+            root: None,
+            form: Box::new(Form::Empty),
+            extra: HashMap::new(),
+        }
+    }
+
     /// Construct a new, root schema from a SerdeSchema.
-    pub fn from_serde(serde_schema: SerdeSchema) -> Result<Schema, JslError> {
-        Err(JslError::InvalidForm)
+    pub fn from_serde(serde_schema: SerdeSchema) -> Result<Schema, Error> {
+        let base = if let Some(ref id) = serde_schema.id {
+            Some(id.parse()?)
+        } else {
+            None
+        };
+
+        Self::_from_serde(&base, true, serde_schema)
+    }
+
+    fn _from_serde(
+        base: &Option<Url>,
+        root: bool,
+        serde_schema: SerdeSchema,
+    ) -> Result<Schema, Error> {
+        let root = if root {
+            let id = if let Some(id) = serde_schema.id {
+                Some(Url::parse(&id)?)
+            } else {
+                None
+            };
+
+            let defs = if let Some(defs) = serde_schema.defs {
+                let mut out = HashMap::new();
+                for (name, sub_schema) in defs {
+                    out.insert(name, Self::_from_serde(base, false, sub_schema)?);
+                }
+
+                out
+            } else {
+                HashMap::new()
+            };
+
+            Some(RootData { id, defs })
+        } else {
+            None
+        };
+
+        let mut form = Form::Empty;
+
+        if let Some(rxf) = serde_schema.rxf {
+            let (uri, def) = if let Some(ref base) = base {
+                let mut resolved = base.join(&rxf)?;
+                let frag = resolved.fragment().map(|f| f.to_owned());
+                resolved.set_fragment(None);
+
+                (Some(resolved), frag)
+            } else {
+                // There is no base URI. Either the reference is intra-document
+                // (just a fragment, and thus is empty or starts with "#"), or
+                // it can be parsed as an absolute URI.
+                if rxf.is_empty() || rxf == "#" {
+                    (None, None)
+                } else if rxf.starts_with("#") {
+                    (None, Some(rxf[1..].to_owned()))
+                } else {
+                    let mut resolved: Url = rxf.parse()?;
+                    let frag = resolved.fragment().map(|f| f.to_owned());
+                    resolved.set_fragment(None);
+
+                    (Some(resolved), frag)
+                }
+            };
+
+            form = Form::Ref(uri, def)
+        }
+
+        if let Some(typ) = serde_schema.typ {
+            if form != Form::Empty {
+                bail!(JslError::InvalidForm);
+            }
+
+            form = Form::Type(match typ.as_ref() {
+                "null" => Type::Null,
+                "boolean" => Type::Boolean,
+                "number" => Type::Number,
+                "string" => Type::String,
+                _ => bail!(JslError::InvalidForm),
+            });
+        }
+
+        if let Some(elements) = serde_schema.elems {
+            if form != Form::Empty {
+                bail!(JslError::InvalidForm);
+            }
+
+            form = Form::Elements(Self::_from_serde(base, false, *elements)?);
+        }
+
+        if serde_schema.props.is_some() || serde_schema.opt_props.is_some() {
+            if form != Form::Empty {
+                bail!(JslError::InvalidForm);
+            }
+
+            let mut required = HashMap::new();
+            for (name, sub_schema) in serde_schema.props.unwrap_or_default() {
+                required.insert(name, Self::_from_serde(base, false, sub_schema)?);
+            }
+
+            let mut optional = HashMap::new();
+            for (name, sub_schema) in serde_schema.opt_props.unwrap_or_default() {
+                if required.contains_key(&name) {
+                    bail!(JslError::AmbiguousProperty { property: name });
+                }
+
+                optional.insert(name, Self::_from_serde(base, false, sub_schema)?);
+            }
+
+            form = Form::Properties(required, optional);
+        }
+
+        if let Some(values) = serde_schema.values {
+            if form != Form::Empty {
+                bail!(JslError::InvalidForm);
+            }
+
+            form = Form::Values(Self::_from_serde(base, false, *values)?);
+        }
+
+        if let Some(discriminator) = serde_schema.discriminator {
+            if form != Form::Empty {
+                bail!(JslError::InvalidForm);
+            }
+
+            let mut mapping = HashMap::new();
+            for (name, sub_schema) in discriminator.mapping {
+                let sub_schema = Self::_from_serde(base, false, sub_schema)?;
+                match sub_schema.form.as_ref() {
+                    Form::Properties(required, optional) => {
+                        if required.contains_key(&discriminator.tag)
+                            || optional.contains_key(&discriminator.tag)
+                        {
+                            bail!(JslError::AmbiguousProperty {
+                                property: discriminator.tag,
+                            });
+                        }
+                    }
+                    _ => bail!(JslError::InvalidForm),
+                };
+
+                mapping.insert(name, sub_schema);
+            }
+
+            form = Form::Discriminator(discriminator.tag, mapping);
+        }
+
+        Ok(Schema {
+            root,
+            form: Box::new(form),
+            extra: HashMap::new(),
+        })
     }
 
     /// Is this schema a root schema?
@@ -92,6 +252,7 @@ impl Schema {
 }
 
 /// Data relevant only for root schemas.
+#[derive(Clone, Debug, PartialEq)]
 pub struct RootData {
     id: Option<Url>,
     defs: HashMap<String, Schema>,
@@ -139,6 +300,7 @@ impl RootData {
 }
 
 /// The various forms which a schema may take on, and their respective data.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Form {
     /// The empty form.
     ///
@@ -201,6 +363,7 @@ pub enum Form {
 /// In a certain sense, you can consider these types to be JSON's "primitive"
 /// types, with the remaining two types, arrays and objects, being the "complex"
 /// types covered by other keywords.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
     /// The "null" JSON value.
     Null,
@@ -350,5 +513,460 @@ mod tests {
 
         let round_trip = serde_json::to_string_pretty(&parsed).expect("failed to serialize json");
         assert_eq!(round_trip, data);
+    }
+
+    #[test]
+    fn from_serde_root() {
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "id": "http://example.com/foo",
+                    "definitions": {
+                        "a": { "type": "null" }
+                    }
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: Some("http://example.com/foo".parse().unwrap()),
+                    defs: [(
+                        "a".to_owned(),
+                        Schema {
+                            root: None,
+                            form: Box::new(Form::Type(Type::Null)),
+                            extra: HashMap::new(),
+                        },
+                    )]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                }),
+                form: Box::new(Form::Empty),
+                extra: HashMap::new()
+            }
+        );
+    }
+
+    #[test]
+    fn from_serde_empty() {
+        assert_eq!(
+            Schema::from_serde(serde_json::from_value(json!({})).unwrap()).unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Empty),
+                extra: HashMap::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_serde_ref() {
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "ref": ""
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Ref(None, None)),
+                extra: HashMap::new(),
+            }
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "ref": "#"
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Ref(None, None)),
+                extra: HashMap::new(),
+            }
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "id": "http://example.com/foo",
+                    "ref": ""
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: Some("http://example.com/foo".parse().unwrap()),
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Ref(
+                    Some("http://example.com/foo".parse().unwrap()),
+                    None
+                )),
+                extra: HashMap::new(),
+            }
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "id": "http://example.com/foo",
+                    "ref": "/bar"
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: Some("http://example.com/foo".parse().unwrap()),
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Ref(
+                    Some("http://example.com/bar".parse().unwrap()),
+                    None
+                )),
+                extra: HashMap::new(),
+            }
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "id": "http://example.com/foo",
+                    "ref": "#asdf"
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: Some("http://example.com/foo".parse().unwrap()),
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Ref(
+                    Some("http://example.com/foo".parse().unwrap()),
+                    Some("asdf".to_owned()),
+                )),
+                extra: HashMap::new(),
+            }
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "id": "http://example.com/foo",
+                    "ref": "/bar#asdf"
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: Some("http://example.com/foo".parse().unwrap()),
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Ref(
+                    Some("http://example.com/bar".parse().unwrap()),
+                    Some("asdf".to_owned()),
+                )),
+                extra: HashMap::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_serde_type() {
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "type": "null",
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Type(Type::Null)),
+                extra: HashMap::new(),
+            },
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "type": "boolean",
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Type(Type::Boolean)),
+                extra: HashMap::new(),
+            },
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "type": "number",
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Type(Type::Number)),
+                extra: HashMap::new(),
+            },
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "type": "string",
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Type(Type::String)),
+                extra: HashMap::new(),
+            },
+        );
+
+        assert!(Schema::from_serde(
+            serde_json::from_value(json!({
+                "type": "nonsense",
+            }))
+            .unwrap()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn from_serde_elements() {
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "elements": {
+                        "type": "null",
+                    },
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Elements(Schema {
+                    root: None,
+                    form: Box::new(Form::Type(Type::Null)),
+                    extra: HashMap::new(),
+                })),
+                extra: HashMap::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_serde_properties() {
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "properties": {
+                        "a": { "type": "null" },
+                    },
+                    "optionalProperties": {
+                        "b": { "type": "null" },
+                    },
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Properties(
+                    [(
+                        "a".to_owned(),
+                        Schema {
+                            root: None,
+                            form: Box::new(Form::Type(Type::Null)),
+                            extra: HashMap::new(),
+                        }
+                    )]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                    [(
+                        "b".to_owned(),
+                        Schema {
+                            root: None,
+                            form: Box::new(Form::Type(Type::Null)),
+                            extra: HashMap::new(),
+                        }
+                    )]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                )),
+                extra: HashMap::new(),
+            }
+        );
+
+        assert!(Schema::from_serde(
+            serde_json::from_value(json!({
+                "properties": {
+                    "a": { "type": "null" },
+                },
+                "optionalProperties": {
+                    "a": { "type": "null" },
+                },
+            }))
+            .unwrap()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn from_serde_values() {
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "values": {
+                        "type": "null",
+                    },
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Values(Schema {
+                    root: None,
+                    form: Box::new(Form::Type(Type::Null)),
+                    extra: HashMap::new(),
+                })),
+                extra: HashMap::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_serde_discriminator() {
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "discriminator": {
+                        "tag": "foo",
+                        "mapping": {
+                            "a": { "properties": {} },
+                            "b": { "properties": {} },
+                        },
+                    },
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Discriminator(
+                    "foo".to_owned(),
+                    [
+                        (
+                            "a".to_owned(),
+                            Schema {
+                                root: None,
+                                form: Box::new(Form::Properties(HashMap::new(), HashMap::new())),
+                                extra: HashMap::new(),
+                            }
+                        ),
+                        (
+                            "b".to_owned(),
+                            Schema {
+                                root: None,
+                                form: Box::new(Form::Properties(HashMap::new(), HashMap::new())),
+                                extra: HashMap::new(),
+                            }
+                        )
+                    ]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                )),
+                extra: HashMap::new(),
+            }
+        );
+
+        assert!(Schema::from_serde(
+            serde_json::from_value(json!({
+                "discriminator": {
+                    "tag": "foo",
+                    "mapping": {
+                        "a": { "type": "null" },
+                    }
+                },
+            }))
+            .unwrap()
+        )
+        .is_err());
+
+        assert!(Schema::from_serde(
+            serde_json::from_value(json!({
+                "discriminator": {
+                    "tag": "foo",
+                    "mapping": {
+                        "a": {
+                            "properties": {
+                                "foo": { "type": "null" },
+                            },
+                        },
+                    },
+                },
+            }))
+            .unwrap()
+        )
+        .is_err());
     }
 }
