@@ -95,6 +95,49 @@ impl<'a> Vm<'a> {
                 }
                 self.pop_schema_token();
             }
+            Form::Properties(ref required, ref optional, has_required) => {
+                if let Some(obj) = instance.as_object() {
+                    self.push_schema_token("properties".to_owned());
+                    for (property, sub_schema) in required {
+                        self.push_schema_token(property.clone());
+                        if let Some(sub_instance) = obj.get(property) {
+                            self.push_instance_token(property.clone());
+                            self.eval(sub_schema, sub_instance)?;
+                            self.pop_instance_token();
+                        } else {
+                            self.push_err()?;
+                        }
+                        self.pop_schema_token();
+                    }
+                    self.pop_schema_token();
+
+                    self.push_schema_token("optionalProperties".to_owned());
+                    for (property, sub_schema) in optional {
+                        self.push_schema_token(property.clone());
+                        if let Some(sub_instance) = obj.get(property) {
+                            self.push_instance_token(property.clone());
+                            self.eval(sub_schema, sub_instance)?;
+                            self.pop_instance_token();
+                        }
+                        self.pop_schema_token();
+                    }
+                    self.pop_schema_token();
+                } else {
+                    // Sort of a weird corner-case in the spec: you have to
+                    // check if the instance is an object at all. If it isn't,
+                    // you produce an error related to `properties`. But if
+                    // there wasn't a `properties` keyword, then you have to
+                    // produce `optionalProperties` instead.
+                    if *has_required {
+                        self.push_schema_token("properties".to_owned());
+                    } else {
+                        self.push_schema_token("optionalProperties".to_owned());
+                    }
+
+                    self.push_err()?;
+                    self.pop_schema_token();
+                }
+            }
             _ => {}
         }
 

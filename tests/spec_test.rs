@@ -53,10 +53,10 @@ fn spec() -> Result<(), std::io::Error> {
 
             let validator = Validator::new(&registry);
 
-            for (j, test_case) in suite.instances.into_iter().enumerate() {
+            for (j, mut test_case) in suite.instances.into_iter().enumerate() {
                 println!("{}/{}", i, j);
 
-                let actual_errors: Vec<_> = validator
+                let mut actual_errors: Vec<_> = validator
                     .validate(&test_case.instance)
                     .expect("error validating instance")
                     .into_iter()
@@ -72,6 +72,12 @@ fn spec() -> Result<(), std::io::Error> {
                         ),
                     })
                     .collect();
+
+                actual_errors
+                    .sort_by_key(|err| format!("{},{}", err.schema_path, err.instance_path));
+                test_case
+                    .errors
+                    .sort_by_key(|err| format!("{},{}", err.schema_path, err.instance_path));
 
                 assert_eq!(actual_errors, test_case.errors);
             }

@@ -123,7 +123,7 @@ impl Registry {
 
             // Recursive cases: discover all references.
             Form::Elements(ref schema) => self.compute_missing_ids(out, schema)?,
-            Form::Properties(ref required, ref optional) => {
+            Form::Properties(ref required, ref optional, _) => {
                 for schema in required.values() {
                     self.compute_missing_ids(out, schema)?;
                 }

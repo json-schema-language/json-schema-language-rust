@@ -133,6 +133,8 @@ impl Schema {
                 bail!(JslError::InvalidForm);
             }
 
+            let has_required = serde_schema.props.is_some();
+
             let mut required = HashMap::new();
             for (name, sub_schema) in serde_schema.props.unwrap_or_default() {
                 required.insert(name, Self::_from_serde(base, false, sub_schema)?);
@@ -147,7 +149,7 @@ impl Schema {
                 optional.insert(name, Self::_from_serde(base, false, sub_schema)?);
             }
 
-            form = Form::Properties(required, optional);
+            form = Form::Properties(required, optional, has_required);
         }
 
         if let Some(values) = serde_schema.values {
@@ -167,7 +169,7 @@ impl Schema {
             for (name, sub_schema) in discriminator.mapping {
                 let sub_schema = Self::_from_serde(base, false, sub_schema)?;
                 match sub_schema.form.as_ref() {
-                    Form::Properties(required, optional) => {
+                    Form::Properties(required, optional, _) => {
                         if required.contains_key(&discriminator.tag)
                             || optional.contains_key(&discriminator.tag)
                         {
@@ -341,7 +343,12 @@ pub enum Form {
     ///
     /// The first map is the set of required properties and their schemas. The
     /// second map is the set of optional properties and their schemas.
-    Properties(HashMap<String, Schema>, HashMap<String, Schema>),
+    ///
+    /// The final property indicates whether `properties` exists on the schema.
+    /// This allows implementations to distinguish the case of an empty
+    /// `properties` field from an omitted one. This is necessary for tooling
+    /// which wants to link to a particular part of a schema in JSON form.
+    Properties(HashMap<String, Schema>, HashMap<String, Schema>, bool),
 
     /// The values form.
     ///
@@ -869,6 +876,41 @@ mod tests {
                     .iter()
                     .cloned()
                     .collect(),
+                    true,
+                )),
+                extra: HashMap::new(),
+            }
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "optionalProperties": {
+                        "b": { "type": "null" },
+                    },
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: None,
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Properties(
+                    HashMap::new(),
+                    [(
+                        "b".to_owned(),
+                        Schema {
+                            root: None,
+                            form: Box::new(Form::Type(Type::Null)),
+                            extra: HashMap::new(),
+                        }
+                    )]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                    false,
                 )),
                 extra: HashMap::new(),
             }
@@ -943,7 +985,11 @@ mod tests {
                             "a".to_owned(),
                             Schema {
                                 root: None,
-                                form: Box::new(Form::Properties(HashMap::new(), HashMap::new())),
+                                form: Box::new(Form::Properties(
+                                    HashMap::new(),
+                                    HashMap::new(),
+                                    true
+                                )),
                                 extra: HashMap::new(),
                             }
                         ),
@@ -951,7 +997,11 @@ mod tests {
                             "b".to_owned(),
                             Schema {
                                 root: None,
-                                form: Box::new(Form::Properties(HashMap::new(), HashMap::new())),
+                                form: Box::new(Form::Properties(
+                                    HashMap::new(),
+                                    HashMap::new(),
+                                    true
+                                )),
                                 extra: HashMap::new(),
                             }
                         )
