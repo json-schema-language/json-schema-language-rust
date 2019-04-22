@@ -1,8 +1,9 @@
 //! Logic related to holding a collection of schemas together.
 
 use crate::errors::JslError;
-use crate::schema::Schema;
-use std::collections::HashMap;
+use crate::schema::{Form, Schema};
+use failure::{bail, Error};
+use std::collections::{HashMap, HashSet};
 use url::Url;
 
 /// Holds a collection of schemas, ensuring their mutual references are valid.
@@ -44,23 +45,29 @@ impl Registry {
     ///     missing = registry.register(schema)?;
     /// }
     /// ```
-    pub fn register(&mut self, schema: Schema) -> Result<&[Url], JslError> {
+    pub fn register(&mut self, schema: Schema) -> Result<&[Url], Error> {
         let id = if let Some(root_data) = schema.root_data() {
             root_data.id()
         } else {
-            return Err(JslError::NonRoot);
+            bail!(JslError::NonRoot);
         };
 
         self.schemas.insert(id.clone(), schema);
 
+        let mut missing_ids = HashSet::new();
+        for schema in self.schemas.values() {
+            self.compute_missing_ids(&mut missing_ids, schema)?;
+        }
+
+        self.missing_ids = missing_ids.into_iter().collect();
         Ok(&self.missing_ids)
     }
 
     /// Gets the schema in this registry with the given ID.
     ///
     /// If no such schema exists in this registry, returns None.
-    pub fn get(&self, id: &Option<Url>) -> &Option<Schema> {
-        &None
+    pub fn get(&self, id: &Option<Url>) -> Option<&Schema> {
+        self.schemas.get(id)
     }
 
     /// Is this registry sealed?
@@ -80,5 +87,226 @@ impl Registry {
     /// This is the same value as what [`register`](#method.register) returns.
     pub fn missing_ids(&self) -> &[Url] {
         &self.missing_ids
+    }
+
+    fn compute_missing_ids(&self, out: &mut HashSet<Url>, schema: &Schema) -> Result<(), Error> {
+        if let Some(root) = schema.root_data() {
+            for def in root.definitions().values() {
+                self.compute_missing_ids(out, def)?;
+            }
+        }
+
+        match schema.form() {
+            // Main case: checking references.
+            Form::Ref(ref id, ref def) => {
+                if let Some(refd_schema) = self.schemas.get(id) {
+                    let refd_root_data = refd_schema
+                        .root_data()
+                        .as_ref()
+                        .expect("unreachable: non-root schema in registry");
+
+                    if let Some(def) = def {
+                        if !refd_root_data.definitions().contains_key(def) {
+                            bail!(JslError::NoSuchDefinition {
+                                id: id.clone(),
+                                definition: def.clone(),
+                            });
+                        }
+                    }
+                } else {
+                    out.insert(
+                        id.clone()
+                            .expect("unreachable: non-resolving reference to anonymous schema"),
+                    );
+                }
+            }
+
+            // Recursive cases: discover all references.
+            Form::Elements(ref schema) => self.compute_missing_ids(out, schema)?,
+            Form::Properties(ref required, ref optional) => {
+                for schema in required.values() {
+                    self.compute_missing_ids(out, schema)?;
+                }
+
+                for schema in optional.values() {
+                    self.compute_missing_ids(out, schema)?;
+                }
+            }
+            Form::Values(ref schema) => self.compute_missing_ids(out, schema)?,
+            Form::Discriminator(_, ref mapping) => {
+                for schema in mapping.values() {
+                    self.compute_missing_ids(out, schema)?;
+                }
+            }
+            _ => {}
+        };
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn register() {
+        let mut registry = Registry::new();
+        let missing1 = registry
+            .register(
+                Schema::from_serde(
+                    serde_json::from_value(json!({
+                        "id": "http://example.com/foo",
+                        "definitions": {
+                            "a": {
+                                "ref": "",
+                            },
+                            "b": {
+                                "ref": "#",
+                            },
+                            "c": {
+                                "ref": "#c"
+                            },
+                            "d": {
+                                "ref": "http://example.com/foo#d"
+                            }
+                        }
+                    }))
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(missing1, &[]);
+
+        let missing2 = registry
+            .register(
+                Schema::from_serde(
+                    serde_json::from_value(json!({
+                        "id": "http://example.com/foo",
+                        "definitions": {
+                            "a": {
+                                "ref": "/bar",
+                            },
+                            "b": {
+                                "ref": "//foo.example.com",
+                            },
+                            "c": {
+                                "ref": "/bar#c"
+                            },
+                            "d": {
+                                "ref": "//foo.example.com#d"
+                            }
+                        }
+                    }))
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let mut missing2: Vec<_> = missing2.iter().cloned().collect();
+        missing2.sort();
+        assert_eq!(
+            missing2,
+            &[
+                "http://example.com/bar".parse().unwrap(),
+                "http://foo.example.com".parse().unwrap(),
+            ]
+        );
+
+        let missing3 = registry
+            .register(
+                Schema::from_serde(
+                    serde_json::from_value(json!({
+                        "id": "http://example.com/bar",
+                        "definitions": {
+                            "c": {},
+                        },
+                    }))
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(missing3, &["http://foo.example.com".parse().unwrap()]);
+
+        let missing4 = registry
+            .register(
+                Schema::from_serde(
+                    serde_json::from_value(json!({
+                        "id": "http://foo.example.com",
+                        "definitions": {
+                            "d": {},
+                        },
+                    }))
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(missing4, &[]);
+        assert!(registry.is_sealed());
+
+        let missing5 = registry
+            .register(
+                Schema::from_serde(
+                    serde_json::from_value(json!({
+                        "id": "http://bar.example.com",
+                        "definitions": {
+                            "a": {
+                                "ref": "/1",
+                            },
+                            "b": {
+                                "elements": { "ref": "/2" },
+                            },
+                            "c": {
+                                "properties": {
+                                    "a": { "ref": "/3" },
+                                },
+                                "optionalProperties": {
+                                    "b": { "ref": "/4" },
+                                },
+                            },
+                            "d": {
+                                "values": { "ref": "/5" },
+                            },
+                            "e": {
+                                "discriminator": {
+                                    "tag": "foo",
+                                    "mapping": {
+                                        "a": {
+                                            "properties": {
+                                                "a": { "ref": "/6" },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    }))
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let mut missing5: Vec<_> = missing5.iter().cloned().collect();
+        missing5.sort();
+        assert_eq!(
+            missing5,
+            &[
+                "http://bar.example.com/1".parse().unwrap(),
+                "http://bar.example.com/2".parse().unwrap(),
+                "http://bar.example.com/3".parse().unwrap(),
+                "http://bar.example.com/4".parse().unwrap(),
+                "http://bar.example.com/5".parse().unwrap(),
+                "http://bar.example.com/6".parse().unwrap(),
+            ]
+        );
     }
 }

@@ -52,12 +52,6 @@ impl Schema {
         serde_schema: SerdeSchema,
     ) -> Result<Schema, Error> {
         let root = if root {
-            let id = if let Some(id) = serde_schema.id {
-                Some(Url::parse(&id)?)
-            } else {
-                None
-            };
-
             let defs = if let Some(defs) = serde_schema.defs {
                 let mut out = HashMap::new();
                 for (name, sub_schema) in defs {
@@ -69,7 +63,10 @@ impl Schema {
                 HashMap::new()
             };
 
-            Some(RootData { id, defs })
+            Some(RootData {
+                id: base.clone(),
+                defs,
+            })
         } else {
             None
         };
@@ -79,7 +76,13 @@ impl Schema {
         if let Some(rxf) = serde_schema.rxf {
             let (uri, def) = if let Some(ref base) = base {
                 let mut resolved = base.join(&rxf)?;
-                let frag = resolved.fragment().map(|f| f.to_owned());
+                let frag = resolved.fragment().and_then(|f| {
+                    if f.is_empty() {
+                        None
+                    } else {
+                        Some(f.to_owned())
+                    }
+                });
                 resolved.set_fragment(None);
 
                 (Some(resolved), frag)
@@ -607,6 +610,28 @@ mod tests {
                 serde_json::from_value(json!({
                     "id": "http://example.com/foo",
                     "ref": ""
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                root: Some(RootData {
+                    id: Some("http://example.com/foo".parse().unwrap()),
+                    defs: HashMap::new(),
+                }),
+                form: Box::new(Form::Ref(
+                    Some("http://example.com/foo".parse().unwrap()),
+                    None
+                )),
+                extra: HashMap::new(),
+            }
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "id": "http://example.com/foo",
+                    "ref": "#"
                 }))
                 .unwrap()
             )
