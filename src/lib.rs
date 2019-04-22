@@ -93,7 +93,7 @@
 //!
 //! [jsl-docs]: http://json-schema-language.github.io/docs
 
-// mod vm;
+mod vm;
 
 pub mod errors;
 pub mod registry;
@@ -103,7 +103,7 @@ pub mod validator;
 pub use crate::errors::JslError;
 pub use crate::registry::Registry;
 pub use crate::schema::{Schema, SerdeSchema};
-pub use crate::validator::{Validator, ValidatorConfig, ValidationError};
+pub use crate::validator::{ValidationError, Validator, ValidatorConfig};
 
 // pub use crate::schema::Registry;
 // pub use crate::serde::SerdeSchema;

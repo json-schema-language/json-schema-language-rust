@@ -59,4 +59,12 @@ pub enum JslError {
   /// A non-root schema was given to a function which expected a root schema.
   #[fail(display = "non-root schema given when root schema was required")]
   NonRoot,
+
+  /// A sealed registry was given to a function which expected a sealed schema.
+  #[fail(display = "unsealed registry given when sealed registry was required")]
+  Unsealed,
+
+  /// An ID was given, but no schema with that ID exists.
+  #[fail(display = "no schema with the given id found")]
+  NoSuchSchema,
 }

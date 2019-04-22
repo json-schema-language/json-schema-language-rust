@@ -6,8 +6,9 @@
 //!
 //! See the docs for [`Validator`](struct.Validator.html) for more.
 
-use crate::errors::JslError;
 use crate::registry::Registry;
+use crate::vm::validate;
+use failure::Error;
 use json_pointer::JsonPointer;
 use url::Url;
 
@@ -33,7 +34,7 @@ impl<'a> Validator<'a> {
     ///
     /// See [`validate_by_uri`](#method.validate_by_uri) for possible error
     /// conditions.
-    pub fn validate(&self, instance: serde_json::Value) -> Result<Vec<ValidationError>, JslError> {
+    pub fn validate(&self, instance: &serde_json::Value) -> Result<Vec<ValidationError>, Error> {
         self.validate_by_id(&None, instance)
     }
 
@@ -41,9 +42,15 @@ impl<'a> Validator<'a> {
     pub fn validate_by_id(
         &self,
         id: &Option<Url>,
-        instance: serde_json::Value,
-    ) -> Result<Vec<ValidationError>, JslError> {
-        Ok(vec![])
+        instance: &serde_json::Value,
+    ) -> Result<Vec<ValidationError>, Error> {
+        validate(
+            self.config.max_errors,
+            self.config.max_depth,
+            self.registry,
+            id,
+            instance,
+        )
     }
 }
 
@@ -104,6 +111,18 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
+    pub fn new(
+        instance_path: JsonPointer<String, Vec<String>>,
+        schema_path: JsonPointer<String, Vec<String>>,
+        schema_id: Option<Url>,
+    ) -> ValidationError {
+        ValidationError {
+            instance_path,
+            schema_path,
+            schema_id,
+        }
+    }
+
     /// A pointer into the part of the instance (input) which was rejected.
     pub fn instance_path(&self) -> &JsonPointer<String, Vec<String>> {
         &self.instance_path
