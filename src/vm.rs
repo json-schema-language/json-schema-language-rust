@@ -151,6 +151,40 @@ impl<'a> Vm<'a> {
                 }
                 self.pop_schema_token();
             }
+            Form::Discriminator(ref tag, ref mapping) => {
+                self.push_schema_token("discriminator".to_owned());
+                if let Some(obj) = instance.as_object() {
+                    if let Some(instance_tag) = obj.get(tag) {
+                        if let Some(instance_tag) = instance_tag.as_str() {
+                            if let Some(sub_schema) = mapping.get(instance_tag) {
+                                self.push_schema_token("mapping".to_owned());
+                                self.push_schema_token(instance_tag.to_owned());
+                                self.eval(sub_schema, instance);
+                                self.pop_schema_token();
+                                self.pop_schema_token();
+                            } else {
+                                self.push_schema_token("mapping".to_owned());
+                                self.push_instance_token(tag.clone());
+                                self.push_err()?;
+                                self.pop_instance_token();
+                                self.pop_schema_token();
+                            }
+                        } else {
+                            self.push_schema_token("tag".to_owned());
+                            self.push_instance_token(tag.clone());
+                            self.push_err()?;
+                            self.pop_instance_token();
+                            self.pop_schema_token();
+                        }
+                    } else {
+                        self.push_schema_token("tag".to_owned());
+                        self.push_err()?;
+                        self.pop_schema_token();
+                    }
+                } else {
+                    self.push_err()?;
+                }
+            }
             _ => {}
         }
 
