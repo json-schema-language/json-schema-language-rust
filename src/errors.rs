@@ -67,4 +67,11 @@ pub enum JslError {
   /// An ID was given, but no schema with that ID exists.
   #[fail(display = "no schema with the given id found")]
   NoSuchSchema,
+
+  /// The maximum depth during evaluating was exceeded.
+  ///
+  /// This likely means that your configured `max_depth` is too small, or that
+  /// there is a infinite cyclical definition in your schemas.
+  #[fail(display = "maximum reference depth exceeeded during validation")]
+  MaxDepthExceeded,
 }

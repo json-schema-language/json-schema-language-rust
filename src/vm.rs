@@ -2,7 +2,7 @@ use crate::errors::JslError;
 use crate::registry::Registry;
 use crate::schema::{Form, Schema, Type};
 use crate::validator::ValidationError;
-use failure::{bail, Error};
+use failure::{bail, err_msg, Error};
 use json_pointer::JsonPointer;
 use serde_json::Value;
 use url::Url;
@@ -50,8 +50,41 @@ struct Vm<'a> {
 }
 
 impl<'a> Vm<'a> {
-    fn eval(&mut self, schema: &Schema, instance: &Value) -> Result<(), EvalError> {
+    fn eval(&mut self, schema: &'a Schema, instance: &Value) -> Result<(), EvalError> {
         match schema.form() {
+            Form::Empty => {}
+            Form::Ref(ref id, ref def) => {
+                if self.schemas.len() == self.max_depth {
+                    return Err(EvalError::Actual(err_msg(JslError::MaxDepthExceeded)));
+                }
+
+                let schema_tokens = def
+                    .as_ref()
+                    .map(|def| vec!["definitions".to_owned(), def.clone()])
+                    .unwrap_or(vec![]);
+
+                let root_schema = self
+                    .registry
+                    .get(id)
+                    .expect("unreachable: ref'd schema not found");
+
+                let root_schema_data = root_schema
+                    .root_data()
+                    .as_ref()
+                    .expect("unreachable: non-root schema in registry");
+
+                let refd_schema = if let Some(def) = def {
+                    root_schema_data
+                        .definitions()
+                        .get(def)
+                        .expect("unreachable: ref'd definition not found")
+                } else {
+                    root_schema
+                };
+
+                self.schemas.push((id, schema_tokens));
+                self.eval(refd_schema, instance)?;
+            }
             Form::Type(typ) => match typ {
                 Type::Null => {
                     if !instance.is_null() {
@@ -159,7 +192,7 @@ impl<'a> Vm<'a> {
                             if let Some(sub_schema) = mapping.get(instance_tag) {
                                 self.push_schema_token("mapping".to_owned());
                                 self.push_schema_token(instance_tag.to_owned());
-                                self.eval(sub_schema, instance);
+                                self.eval(sub_schema, instance)?;
                                 self.pop_schema_token();
                                 self.pop_schema_token();
                             } else {
@@ -185,7 +218,6 @@ impl<'a> Vm<'a> {
                     self.push_err()?;
                 }
             }
-            _ => {}
         }
 
         Ok(())
