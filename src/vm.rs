@@ -138,6 +138,19 @@ impl<'a> Vm<'a> {
                     self.pop_schema_token();
                 }
             }
+            Form::Values(ref sub_schema) => {
+                self.push_schema_token("values".to_owned());
+                if let Some(obj) = instance.as_object() {
+                    for (property, sub_instance) in obj {
+                        self.push_instance_token(property.clone());
+                        self.eval(sub_schema, sub_instance)?;
+                        self.pop_instance_token();
+                    }
+                } else {
+                    self.push_err()?;
+                }
+                self.pop_schema_token();
+            }
             _ => {}
         }
 
