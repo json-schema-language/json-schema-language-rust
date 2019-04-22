@@ -82,6 +82,19 @@ impl<'a> Vm<'a> {
                     }
                 }
             },
+            Form::Elements(ref sub_schema) => {
+                self.push_schema_token("elements".to_owned());
+                if let Some(arr) = instance.as_array() {
+                    for (i, elem) in arr.iter().enumerate() {
+                        self.push_instance_token(i.to_string());
+                        self.eval(sub_schema, elem)?;
+                        self.pop_instance_token();
+                    }
+                } else {
+                    self.push_err()?;
+                }
+                self.pop_schema_token();
+            }
             _ => {}
         }
 
@@ -102,6 +115,14 @@ impl<'a> Vm<'a> {
             .expect("unreachable: empty schema stack")
             .1
             .pop();
+    }
+
+    fn push_instance_token(&mut self, token: String) {
+        self.instance_tokens.push(token);
+    }
+
+    fn pop_instance_token(&mut self) {
+        self.instance_tokens.pop();
     }
 
     fn push_err(&mut self) -> Result<(), EvalError> {
