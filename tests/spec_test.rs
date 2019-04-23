@@ -1,4 +1,4 @@
-use jsl::{Registry, Schema, SerdeSchema, ValidationError, Validator};
+use jsl::{Registry, Schema, SerdeSchema, Validator};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs;

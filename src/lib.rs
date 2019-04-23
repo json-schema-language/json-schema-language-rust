@@ -11,67 +11,96 @@
 //! really valid against a schema. Here's how you'd achieve that use-case:
 //!
 //! ```
-//! use jsl::{Registry, SerdeSchema, Validator};
+//! use serde_json::json;
+//! use jsl::{Registry, Schema, SerdeSchema, Validator, ValidationError};
+//! use failure::Error;
+//! use std::collections::HashSet;
 //!
-//! let demo_schema_data = r#"
-//!     {
-//!         "properties": {
-//!             "name": { "type": "string" },
-//!             "age": { "type": "number" },
-//!             "phones": {
-//!                 "elements": { "type": "string" }
+//! fn main() -> Result<(), Error> {
+//!     let demo_schema_data = r#"
+//!         {
+//!             "properties": {
+//!                 "name": { "type": "string" },
+//!                 "age": { "type": "number" },
+//!                 "phones": {
+//!                     "elements": { "type": "string" }
+//!                 }
 //!             }
 //!         }
-//!     }
-//! "#;
+//!     "#;
 //!
-//! // The SerdeSchema type is a serde-friendly format for representing schemas.
-//! let demo_schema: SerdeSchema = serde_json::from_str(demo_schema_data)?;
+//!     // The SerdeSchema type is a serde-friendly format for representing
+//!     // schemas.
+//!     let demo_schema: SerdeSchema = serde_json::from_str(demo_schema_data)?;
 //!
-//! // A registry is a bundle of schemas that can cross-reference one another.
-//! // When you add a SerdeSchema to a Registry, the Registry will return the
-//! // URIs of all schemas still missing from the Registry.
-//! let mut registry = Registry::new();
-//! let missing_uris = registry.register(&[demo_schema])?;
+//!     // The Schema type is a higher-level format that does more validity
+//!     // checks.
+//!     let demo_schema = Schema::from_serde(demo_schema).unwrap();
 //!
-//! // Our schema doesn't use references, so we're not expecting any dangling
-//! // references to other schemas.
-//! assert_eq!(missing_uris, vec![]);
+//!     // A registry is a bundle of schemas that can cross-reference one
+//!     // another. When you add a SerdeSchema to a Registry, the Registry will
+//!     // return the URIs of all schemas still missing from the Registry.
+//!     let mut registry = Registry::new();
+//!     let missing_uris = registry.register(demo_schema)?;
 //!
-//! // Once you've registered all your schemas, you can efficiently begin
-//! // processing as many inputs as desired.
-//! let validator = Validator::new(&registry);
-//! let validation_errors_ok = validator.validate(json!({
-//!     "name": "John Doe",
-//!     "age": 43,
-//!     "phones": [
-//!         "+44 1234567",
-//!         "+44 2345678"
-//!     ]
-//! }));
+//!     // Our schema doesn't use references, so we're not expecting any
+//!     // dangling references to other schemas.
+//!     assert!(missing_uris.is_empty());
 //!
-//! assert_eq!(validation_errors_ok, vec![]);
+//!     // Once you've registered all your schemas, you can efficiently begin
+//!     // processing as many inputs as desired.
+//!     let validator = Validator::new(&registry);
+//!     let validation_errors_ok = validator.validate(&json!({
+//!         "name": "John Doe",
+//!         "age": 43,
+//!         "phones": [
+//!             "+44 1234567",
+//!             "+44 2345678"
+//!         ]
+//!     }))?;
 //!
-//! let validation_errors_bad = validator.validate(json!({
-//!     "age": "43",
-//!     "phones": [
-//!         "+44 1234567",
-//!         442345678
-//!     ]
-//! }));
+//!     assert!(validation_errors_ok.is_empty());
 //!
-//! // Each ValidationError holds paths to the bad part of the input, as well as
-//! // the part of the schema which rejected it.
-//! assert_eq!(validation_errors_bad, vec![
-//!     // name is required, but was not given
-//!     ValidationError::new("", "/properties/name"),
+//!     let mut validation_errors_bad = validator.validate(&json!({
+//!         "age": "43",
+//!         "phones": [
+//!             "+44 1234567",
+//!             442345678
+//!         ]
+//!     }))?;
 //!
-//!     // age was a string, but should be a number
-//!     ValidationError::new("/age", "/properties/age/type"),
+//!     // Each ValidationError holds paths to the bad part of the input, as
+//!     // well as the part of the schema which rejected it.
+//!     //
+//!     // For testing purposes, we'll sort the errors so that their order is
+//!     // predictable.
+//!     validation_errors_bad.sort_by_key(|err| err.instance_path().to_string());
+//!     assert_eq!(validation_errors_bad, vec![
+//!         // name is required, but was not given
+//!         ValidationError::new(
+//!             "".parse().unwrap(),
+//!             "/properties/name".parse().unwrap(),
+//!             None,
+//!         ),
 //!
-//!     // phones[1] was a number, but should be a string
-//!     ValidationError::new("/phones/1", "/properties/phones/elements/type"),
-//! ]);
+//!         // age was a string, but should be a number
+//!         ValidationError::new(
+//!             "/age".parse().unwrap(),
+//!             "/properties/age/type".parse().unwrap(),
+//!             None
+//!         ),
+//!
+//!         // phones[1] was a number, but should be a string
+//!         ValidationError::new(
+//!             "/phones/1".parse().unwrap(),
+//!             "/properties/phones/elements/type".parse().unwrap(),
+//!             None
+//!         ),
+//!     ]);
+//!
+//!     Ok(())
+//! }
+//!
 //! ```
 //!
 //! The [`ValidationError`](ValidationError) type that

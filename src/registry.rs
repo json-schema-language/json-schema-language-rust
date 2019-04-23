@@ -34,15 +34,54 @@ impl Registry {
     /// network.
     ///
     /// ```
-    /// let mut registry = Registry::new();
-    /// let mut missing = registry.register(initial_schema)?;
+    /// use serde_json::json;
+    /// use jsl::{Registry, Schema, SerdeSchema, Validator, ValidationError};
+    /// use failure::{Error, format_err};
+    /// use url::Url;
     ///
-    /// // When this loop completes, all cross-references will be satisfied.
-    /// while !missing.is_empty() {
-    ///     // Your fetch function could decide that an ID is untrusted, and
-    ///     // refuse to fetch it.
-    ///     let schema = fetch(missing[0])?;
-    ///     missing = registry.register(schema)?;
+    /// fn main() -> Result<(), Error> {
+    ///     let initial_schema: SerdeSchema = serde_json::from_value(json!({
+    ///         "properties": {
+    ///             "users": {
+    ///                 "elements": {
+    ///                     "ref": "http://schemas.example.com/user.json"
+    ///                 },
+    ///             },
+    ///             "next_page_token": { "type": "string" },
+    ///         },
+    ///     }))?;
+    ///
+    ///     let initial_schema = Schema::from_serde(initial_schema)?;
+    ///
+    ///     let mut registry = Registry::new();
+    ///     let mut missing = registry.register(initial_schema)?;
+    ///
+    ///     // When this loop completes, all cross-references will be satisfied.
+    ///     while !missing.is_empty() {
+    ///         // Your fetch function could decide that an ID is untrusted, and
+    ///         // refuse to fetch it.
+    ///         let schema = fetch(&missing[0])?;
+    ///         missing = registry.register(schema)?;
+    ///     }
+    ///
+    ///     Ok(())
+    /// }
+    ///
+    /// // This is just a demo implementation. It's up to you how this would
+    /// // really work, but it's strongly recommended that you never simply
+    /// // execute arbitrary schemas from the network.
+    /// fn fetch(url: &Url) -> Result<Schema, Error> {
+    ///     if url.as_str() != "http://schemas.example.com/user.json" {
+    ///         return Err(format_err!("unexpected url"));
+    ///     }
+    ///
+    ///     return Ok(Schema::from_serde(serde_json::from_value(json!({
+    ///         "properties": {
+    ///             "name": { "type": "string" },
+    ///             "display_name": { "type": "string" },
+    ///             "created_at": { "type": "string" },
+    ///         }
+    ///     }))?)?);
     /// }
     /// ```
     pub fn register(&mut self, schema: Schema) -> Result<&[Url], Error> {

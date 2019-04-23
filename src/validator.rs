@@ -104,6 +104,7 @@ impl Default for ValidatorConfig {
 /// Note that, despite its name, `ValidationError` is not an error in the usual
 /// Rust sense. It is an ordinary struct, which happens to contain information
 /// about why some data was unsatisfactory against a given schema.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidationError {
     instance_path: JsonPointer<String, Vec<String>>,
     schema_path: JsonPointer<String, Vec<String>>,
