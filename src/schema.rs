@@ -8,6 +8,7 @@ use crate::errors::JslError;
 use failure::{bail, Error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::ToOwned;
 use std::collections::HashMap;
 use url::Url;
 
@@ -92,11 +93,11 @@ impl Schema {
                 // it can be parsed as an absolute URI.
                 if rxf.is_empty() || rxf == "#" {
                     (None, None)
-                } else if rxf.starts_with("#") {
+                } else if rxf.starts_with('#') {
                     (None, Some(rxf[1..].to_owned()))
                 } else {
                     let mut resolved: Url = rxf.parse()?;
-                    let frag = resolved.fragment().map(|f| f.to_owned());
+                    let frag = resolved.fragment().map(ToOwned::to_owned);
                     resolved.set_fragment(None);
 
                     (Some(resolved), frag)

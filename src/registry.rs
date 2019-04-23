@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use url::Url;
 
 /// Holds a collection of schemas, ensuring their mutual references are valid.
+#[derive(Default)]
 pub struct Registry {
     schemas: HashMap<Option<Url>, Schema>,
     missing_ids: Vec<Url>,

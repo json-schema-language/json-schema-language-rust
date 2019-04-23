@@ -61,7 +61,7 @@ impl<'a> Vm<'a> {
                 let schema_tokens = def
                     .as_ref()
                     .map(|def| vec!["definitions".to_owned(), def.clone()])
-                    .unwrap_or(vec![]);
+                    .unwrap_or_else(|| vec![]);
 
                 let root_schema = self
                     .registry
@@ -256,7 +256,7 @@ impl<'a> Vm<'a> {
         self.errors.push(ValidationError::new(
             JsonPointer::new(self.instance_tokens.clone()),
             JsonPointer::new(schema_path.clone()),
-            schema_id.clone().clone(),
+            (*schema_id).clone(),
         ));
 
         if self.errors.len() == self.max_failures {
