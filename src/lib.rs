@@ -96,20 +96,24 @@
 //!
 //! ```
 //!
-//! The [`ValidationError`](ValidationError) type that
-//! [`Validator::validate`](Validator::validate) produces contains two
-//! [`json_pointer::JsonPointer`s](json_pointer::JsonPointer). These errors are
-//! standardized, and should be understood by any implementation of JSL, not
-//! just this crate.
+//! The [`ValidationError`](validator/struct.ValidationError.html) type that
+//! [`Validator::validate`](validator/struct.Validator.html#method.validate)
+//! produces contains two
+//! [`json_pointer::JsonPointer`s](https://docs.rs/json-pointer/0.3.2/json_pointer/struct.JsonPointer.html).
+//! These paths within these validation errors are standardized, and should be
+//! understood by any implementation of JSL, not just this crate. All compliant
+//! implementations of JSL produce the same paths, making them
+//! platform-independent.
 //!
 //! # Writing tooling on top of JSL
 //!
 //! JSL was designed with the same principles that make JSON so useful: it's
 //! easy to implement, and even easier to build on top of. If you're building
 //! custom tooling on top of JSL, such as UI, documentation, or code generation,
-//! this crate provides a [`Schema`](struct.Schema.html) type for that purpose.
+//! this crate provides a [`Schema`](schema/struct.Schema.html) type for that
+//! purpose.
 //!
-//! See the docs for [`Schema`](struct.Schema.html) for more.
+//! See the docs for [`Schema`](schema/struct.Schema.html) for more.
 //!
 //! [jsl]: http://json-schema-language.github.io
 //!

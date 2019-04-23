@@ -43,6 +43,14 @@ impl<'a> Validator<'a> {
     }
 
     /// Validate an instance against the schema with the given URI.
+    ///
+    /// Returns an error if the registry is currently unsealed (see
+    /// [`Registry::is_sealed`](../registry/struct.Registry.html#method.is_sealed)), or if
+    /// the maximum reference depth is exceeded (see
+    /// [`ValidatorConfig::max_depth`](struct.ValidatorConfig.html#method.max_depth)).
+    ///
+    /// The generated errors have the same lifetime as the inputted instance;
+    /// this crate avoids copying data out of your inputted data.
     pub fn validate_by_id(
         &'a self,
         id: &'a Option<Url>,
@@ -108,6 +116,12 @@ impl Default for ValidatorConfig {
 /// Note that, despite its name, `ValidationError` is not an error in the usual
 /// Rust sense. It is an ordinary struct, which happens to contain information
 /// about why some data was unsatisfactory against a given schema.
+///
+/// ValidationError uses `Cow` instead of `String` to store its components.
+/// That's because this crate makes every effort to never copy data out of your
+/// instances. However, some parts of error paths require allocation (such as
+/// when the `usize` indices of an array are converted into `String`), and so
+/// `Cow` is used.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidationError<'a> {
     instance_path: JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>>,

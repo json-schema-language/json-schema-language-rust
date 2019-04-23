@@ -36,7 +36,7 @@ impl Schema {
         }
     }
 
-    /// Construct a new, root schema from a SerdeSchema.
+    /// Construct a new, root schema from a `SerdeSchema`.
     pub fn from_serde(serde_schema: SerdeSchema) -> Result<Schema, Error> {
         let base = if let Some(ref id) = serde_schema.id {
             Some(id.parse()?)
@@ -397,7 +397,8 @@ pub enum Type {
 /// This struct is meant for use with the `serde` crate. It is excellent for
 /// parsing from various data formats, but does not enforce all the semantic
 /// rules about how schemas must be formed. For that, consider converting
-/// instances of `SerdeSchema` into [`Schema`](struct.Schema.html).
+/// instances of `SerdeSchema` into [`Schema`](struct.Schema.html) using
+/// [`Schema::from_serde`](struct.Schema.html#method.from_serde).
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
 pub struct SerdeSchema {
     #[serde(skip_serializing_if = "Option::is_none")]

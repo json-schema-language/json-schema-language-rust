@@ -15,6 +15,10 @@ pub fn validate<'a>(
     id: &'a Option<Url>,
     instance: &'a Value,
 ) -> Result<Vec<ValidationError<'a>>, Error> {
+    if !registry.is_sealed() {
+        bail!(JslError::Unsealed);
+    }
+
     let mut vm = Vm {
         max_failures,
         max_depth,
