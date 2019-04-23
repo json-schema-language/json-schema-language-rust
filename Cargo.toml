@@ -1,6 +1,12 @@
 [package]
 name = "jsl"
 version = "0.1.0"
+description = "JSON Schema Language validator and utilities."
+license = "MIT"
+license-file = "LICENSE"
+documentation = "https://docs.rs/jsl"
+homepage = "https://github.com/json-schema-language/json-schema-language-rust"
+repository = "https://github.com/json-schema-language/json-schema-language-rust"
 authors = ["Ulysse Carion <ulysse@segment.com>"]
 edition = "2018"
 
