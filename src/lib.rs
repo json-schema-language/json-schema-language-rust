@@ -128,5 +128,5 @@ pub mod validator;
 
 pub use crate::errors::JslError;
 pub use crate::registry::Registry;
-pub use crate::schema::{Schema, Serde};
+pub use crate::schema::{Schema, Serde as SerdeSchema};
 pub use crate::validator::{Config, ValidationError, Validator};
