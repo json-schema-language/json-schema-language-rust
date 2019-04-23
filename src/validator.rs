@@ -10,6 +10,7 @@ use crate::registry::Registry;
 use crate::vm::validate;
 use failure::Error;
 use json_pointer::JsonPointer;
+use std::borrow::Cow;
 use url::Url;
 
 /// Validates instances against a registry of schemas.
@@ -34,16 +35,19 @@ impl<'a> Validator<'a> {
     ///
     /// See [`validate_by_uri`](#method.validate_by_uri) for possible error
     /// conditions.
-    pub fn validate(&self, instance: &serde_json::Value) -> Result<Vec<ValidationError>, Error> {
+    pub fn validate(
+        &'a self,
+        instance: &'a serde_json::Value,
+    ) -> Result<Vec<ValidationError<'a>>, Error> {
         self.validate_by_id(&None, instance)
     }
 
     /// Validate an instance against the schema with the given URI.
     pub fn validate_by_id(
-        &self,
-        id: &Option<Url>,
-        instance: &serde_json::Value,
-    ) -> Result<Vec<ValidationError>, Error> {
+        &'a self,
+        id: &'a Option<Url>,
+        instance: &'a serde_json::Value,
+    ) -> Result<Vec<ValidationError<'a>>, Error> {
         validate(
             self.config.max_errors,
             self.config.max_depth,
@@ -105,18 +109,18 @@ impl Default for ValidatorConfig {
 /// Rust sense. It is an ordinary struct, which happens to contain information
 /// about why some data was unsatisfactory against a given schema.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ValidationError {
-    instance_path: JsonPointer<String, Vec<String>>,
-    schema_path: JsonPointer<String, Vec<String>>,
-    schema_id: Option<Url>,
+pub struct ValidationError<'a> {
+    instance_path: JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>>,
+    schema_path: JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>>,
+    schema_id: &'a Option<Url>,
 }
 
-impl ValidationError {
+impl<'a> ValidationError<'a> {
     pub fn new(
-        instance_path: JsonPointer<String, Vec<String>>,
-        schema_path: JsonPointer<String, Vec<String>>,
-        schema_id: Option<Url>,
-    ) -> ValidationError {
+        instance_path: JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>>,
+        schema_path: JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>>,
+        schema_id: &'a Option<Url>,
+    ) -> ValidationError<'a> {
         ValidationError {
             instance_path,
             schema_path,
@@ -125,12 +129,12 @@ impl ValidationError {
     }
 
     /// A pointer into the part of the instance (input) which was rejected.
-    pub fn instance_path(&self) -> &JsonPointer<String, Vec<String>> {
+    pub fn instance_path(&self) -> &JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>> {
         &self.instance_path
     }
 
     /// A pointer into the part of the schema which rejected the instance.
-    pub fn schema_path(&self) -> &JsonPointer<String, Vec<String>> {
+    pub fn schema_path(&self) -> &JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>> {
         &self.schema_path
     }
 

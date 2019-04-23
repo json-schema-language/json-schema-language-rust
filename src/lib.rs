@@ -50,53 +50,46 @@
 //!     // Once you've registered all your schemas, you can efficiently begin
 //!     // processing as many inputs as desired.
 //!     let validator = Validator::new(&registry);
-//!     let validation_errors_ok = validator.validate(&json!({
+//!     let input_ok = json!({
 //!         "name": "John Doe",
 //!         "age": 43,
 //!         "phones": [
 //!             "+44 1234567",
 //!             "+44 2345678"
 //!         ]
-//!     }))?;
+//!     });
 //!
+//!     let validation_errors_ok = validator.validate(&input_ok)?;
 //!     assert!(validation_errors_ok.is_empty());
 //!
-//!     let mut validation_errors_bad = validator.validate(&json!({
+//!     let input_bad = json!({
 //!         "age": "43",
 //!         "phones": [
 //!             "+44 1234567",
 //!             442345678
 //!         ]
-//!     }))?;
+//!     });
 //!
 //!     // Each ValidationError holds paths to the bad part of the input, as
 //!     // well as the part of the schema which rejected it.
 //!     //
 //!     // For testing purposes, we'll sort the errors so that their order is
 //!     // predictable.
+//!     let mut validation_errors_bad = validator.validate(&input_bad)?;
 //!     validation_errors_bad.sort_by_key(|err| err.instance_path().to_string());
-//!     assert_eq!(validation_errors_bad, vec![
-//!         // name is required, but was not given
-//!         ValidationError::new(
-//!             "".parse().unwrap(),
-//!             "/properties/name".parse().unwrap(),
-//!             None,
-//!         ),
+//!     assert_eq!(validation_errors_bad.len(), 3);
 //!
-//!         // age was a string, but should be a number
-//!         ValidationError::new(
-//!             "/age".parse().unwrap(),
-//!             "/properties/age/type".parse().unwrap(),
-//!             None
-//!         ),
+//!     // "name" is required
+//!     assert_eq!(validation_errors_bad[0].instance_path().to_string(), "");
+//!     assert_eq!(validation_errors_bad[0].schema_path().to_string(), "/properties/name");
 //!
-//!         // phones[1] was a number, but should be a string
-//!         ValidationError::new(
-//!             "/phones/1".parse().unwrap(),
-//!             "/properties/phones/elements/type".parse().unwrap(),
-//!             None
-//!         ),
-//!     ]);
+//!     // "age" has the wrong type
+//!     assert_eq!(validation_errors_bad[1].instance_path().to_string(), "/age");
+//!     assert_eq!(validation_errors_bad[1].schema_path().to_string(), "/properties/age/type");
+//!
+//!     // "phones[1]" has the wrong type
+//!     assert_eq!(validation_errors_bad[2].instance_path().to_string(), "/phones/1");
+//!     assert_eq!(validation_errors_bad[2].schema_path().to_string(), "/properties/phones/elements/type");
 //!
 //!     Ok(())
 //! }
