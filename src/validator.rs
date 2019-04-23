@@ -15,20 +15,20 @@ use url::Url;
 
 /// Validates instances against a registry of schemas.
 pub struct Validator<'a> {
-    config: ValidatorConfig,
+    config: Config,
     registry: &'a Registry,
 }
 
 impl<'a> Validator<'a> {
     /// Constructs a new validator using a registry and the default
     /// configuration.
-    pub fn new(registry: &Registry) -> Validator {
-        Self::new_with_config(ValidatorConfig::default(), registry)
+    pub fn new(registry: &'a Registry) -> Self {
+        Self::new_with_config(Config::default(), registry)
     }
 
     /// Constructs a new validator using a registry and configuration.
-    pub fn new_with_config(config: ValidatorConfig, registry: &Registry) -> Validator {
-        Validator { config, registry }
+    pub fn new_with_config(config: Config, registry: &'a Registry) -> Self {
+        Self { config, registry }
     }
 
     /// Validate an instance against the default schema the registry.
@@ -67,15 +67,15 @@ impl<'a> Validator<'a> {
 }
 
 /// Configuration for how validation should proceed.
-pub struct ValidatorConfig {
+pub struct Config {
     max_errors: usize,
     max_depth: usize,
 }
 
-impl ValidatorConfig {
-    /// Create a new, default `ValidatorConfig`.
-    pub fn new() -> ValidatorConfig {
-        ValidatorConfig::default()
+impl Config {
+    /// Create a new, default `Config`.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Sets the maximum number of errors to produce before stopping validation.
@@ -83,7 +83,7 @@ impl ValidatorConfig {
     ///
     /// If your use-case doesn't care about errors, and you just want to abort
     /// on the first error, you should set this value to 1.
-    pub fn max_errors(&mut self, max_errors: usize) -> &mut ValidatorConfig {
+    pub fn max_errors(&mut self, max_errors: usize) -> &mut Self {
         self.max_errors = max_errors;
         self
     }
@@ -96,15 +96,15 @@ impl ValidatorConfig {
     ///
     /// This functionality exists to support detecting infinite loops in
     /// schemas, for example in circularly-defined schemas.
-    pub fn max_depth(&mut self, max_depth: usize) -> &mut ValidatorConfig {
+    pub fn max_depth(&mut self, max_depth: usize) -> &mut Self {
         self.max_depth = max_depth;
         self
     }
 }
 
-impl Default for ValidatorConfig {
+impl Default for Config {
     fn default() -> Self {
-        ValidatorConfig {
+        Self {
             max_errors: 0,
             max_depth: 32,
         }
@@ -117,7 +117,7 @@ impl Default for ValidatorConfig {
 /// Rust sense. It is an ordinary struct, which happens to contain information
 /// about why some data was unsatisfactory against a given schema.
 ///
-/// ValidationError uses `Cow` instead of `String` to store its components.
+/// `ValidationError` uses `Cow` instead of `String` to store its components.
 /// That's because this crate makes every effort to never copy data out of your
 /// instances. However, some parts of error paths require allocation (such as
 /// when the `usize` indices of an array are converted into `String`), and so

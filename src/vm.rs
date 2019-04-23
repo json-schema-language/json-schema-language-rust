@@ -63,10 +63,10 @@ impl<'a> Vm<'a> {
                     return Err(EvalError::Actual(err_msg(JslError::MaxDepthExceeded)));
                 }
 
-                let schema_tokens = def
-                    .as_ref()
-                    .map(|def| vec![Cow::Borrowed("definitions"), Cow::Borrowed(def)])
-                    .unwrap_or_else(|| vec![]);
+                let schema_tokens = def.as_ref().map_or_else(
+                    || vec![],
+                    |def| vec![Cow::Borrowed("definitions"), Cow::Borrowed(def)],
+                );
 
                 let root_schema = self
                     .registry

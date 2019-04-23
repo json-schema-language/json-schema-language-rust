@@ -16,9 +16,7 @@ use url::Url;
 ///
 /// This struct is meant for use by validators, code generators, or other
 /// high-level processors of schemas. For serialization and deserialization of
-/// schemas, instead use [`SerdeSchema`](struct.SerdeSchema.html). `Schema` and
-/// `SerdeSchema` can be converted between each other within the context of a
-/// `Registry`.
+/// schemas, instead use [`Serde`](struct.Serde.html).
 #[derive(Clone, PartialEq, Debug)]
 pub struct Schema {
     root: Option<RootData>,
@@ -28,16 +26,16 @@ pub struct Schema {
 
 impl Schema {
     /// Construct a new, non-root, empty-form schema without any extra data.
-    pub fn new_empty() -> Schema {
-        Schema {
+    pub fn new_empty() -> Self {
+        Self {
             root: None,
             form: Box::new(Form::Empty),
             extra: HashMap::new(),
         }
     }
 
-    /// Construct a new, root schema from a `SerdeSchema`.
-    pub fn from_serde(serde_schema: SerdeSchema) -> Result<Schema, Error> {
+    /// Construct a new, root schema from a `Serde`.
+    pub fn from_serde(serde_schema: Serde) -> Result<Self, Error> {
         let base = if let Some(ref id) = serde_schema.id {
             Some(id.parse()?)
         } else {
@@ -47,11 +45,7 @@ impl Schema {
         Self::_from_serde(&base, true, serde_schema)
     }
 
-    fn _from_serde(
-        base: &Option<Url>,
-        root: bool,
-        serde_schema: SerdeSchema,
-    ) -> Result<Schema, Error> {
+    fn _from_serde(base: &Option<Url>, root: bool, serde_schema: Serde) -> Result<Self, Error> {
         let root = if root {
             let defs = if let Some(defs) = serde_schema.defs {
                 let mut out = HashMap::new();
@@ -188,7 +182,7 @@ impl Schema {
             form = Form::Discriminator(discriminator.tag, mapping);
         }
 
-        Ok(Schema {
+        Ok(Self {
             root,
             form: Box::new(form),
             extra: HashMap::new(),
@@ -397,16 +391,16 @@ pub enum Type {
 /// This struct is meant for use with the `serde` crate. It is excellent for
 /// parsing from various data formats, but does not enforce all the semantic
 /// rules about how schemas must be formed. For that, consider converting
-/// instances of `SerdeSchema` into [`Schema`](struct.Schema.html) using
+/// instances of `Serde` into [`Schema`](struct.Schema.html) using
 /// [`Schema::from_serde`](struct.Schema.html#method.from_serde).
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
-pub struct SerdeSchema {
+pub struct Serde {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "definitions")]
-    pub defs: Option<HashMap<String, SerdeSchema>>,
+    pub defs: Option<HashMap<String, Serde>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "ref")]
@@ -418,18 +412,18 @@ pub struct SerdeSchema {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "elements")]
-    pub elems: Option<Box<SerdeSchema>>,
+    pub elems: Option<Box<Serde>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "properties")]
-    pub props: Option<HashMap<String, SerdeSchema>>,
+    pub props: Option<HashMap<String, Serde>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "optionalProperties")]
-    pub opt_props: Option<HashMap<String, SerdeSchema>>,
+    pub opt_props: Option<HashMap<String, Serde>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub values: Option<Box<SerdeSchema>>,
+    pub values: Option<Box<Serde>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discriminator: Option<SerdeDiscriminator>,
@@ -448,7 +442,7 @@ pub struct SerdeSchema {
 pub struct SerdeDiscriminator {
     #[serde(rename = "tag")]
     pub tag: String,
-    pub mapping: HashMap<String, SerdeSchema>,
+    pub mapping: HashMap<String, Serde>,
 }
 
 #[cfg(test)]
@@ -482,36 +476,36 @@ mod tests {
   "extra": "foo"
 }"#;
 
-        let parsed: SerdeSchema = serde_json::from_str(data).expect("failed to parse json");
+        let parsed: Serde = serde_json::from_str(data).expect("failed to parse json");
         assert_eq!(
             parsed,
-            SerdeSchema {
+            Serde {
                 id: Some("http://example.com/foo".to_owned()),
                 rxf: Some("http://example.com/bar".to_owned()),
                 defs: Some(
-                    [("a".to_owned(), SerdeSchema::default())]
+                    [("a".to_owned(), Serde::default())]
                         .iter()
                         .cloned()
                         .collect()
                 ),
                 typ: Some("foo".to_owned()),
-                elems: Some(Box::new(SerdeSchema::default())),
+                elems: Some(Box::new(Serde::default())),
                 props: Some(
-                    [("a".to_owned(), SerdeSchema::default())]
+                    [("a".to_owned(), Serde::default())]
                         .iter()
                         .cloned()
                         .collect()
                 ),
                 opt_props: Some(
-                    [("a".to_owned(), SerdeSchema::default())]
+                    [("a".to_owned(), Serde::default())]
                         .iter()
                         .cloned()
                         .collect()
                 ),
-                values: Some(Box::new(SerdeSchema::default())),
+                values: Some(Box::new(Serde::default())),
                 discriminator: Some(SerdeDiscriminator {
                     tag: "foo".to_owned(),
-                    mapping: [("a".to_owned(), SerdeSchema::default())]
+                    mapping: [("a".to_owned(), Serde::default())]
                         .iter()
                         .cloned()
                         .collect(),

@@ -15,8 +15,8 @@ pub struct Registry {
 
 impl Registry {
     /// Construct a new, empty registry.
-    pub fn new() -> Registry {
-        Registry {
+    pub fn new() -> Self {
+        Self {
             schemas: HashMap::new(),
             missing_ids: Vec::new(),
         }
@@ -162,7 +162,9 @@ impl Registry {
             }
 
             // Recursive cases: discover all references.
-            Form::Elements(ref schema) => self.compute_missing_ids(out, schema)?,
+            Form::Elements(ref schema) | Form::Values(ref schema) => {
+                self.compute_missing_ids(out, schema)?
+            }
             Form::Properties(ref required, ref optional, _) => {
                 for schema in required.values() {
                     self.compute_missing_ids(out, schema)?;
@@ -172,7 +174,6 @@ impl Registry {
                     self.compute_missing_ids(out, schema)?;
                 }
             }
-            Form::Values(ref schema) => self.compute_missing_ids(out, schema)?,
             Form::Discriminator(_, ref mapping) => {
                 for schema in mapping.values() {
                     self.compute_missing_ids(out, schema)?;
