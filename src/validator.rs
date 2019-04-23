@@ -158,3 +158,45 @@ impl<'a> ValidationError<'a> {
         &self.schema_id
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::schema::Schema;
+    use serde_json::json;
+
+    #[test]
+    fn infinite_loop() -> Result<(), Error> {
+        let mut registry = Registry::new();
+        registry.register(Schema::from_serde(serde_json::from_value(json!({
+            "ref": "#",
+        }))?)?)?;
+
+        let validator = Validator::new(&registry);
+        assert!(validator.validate(&json!({})).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn max_errors() -> Result<(), Error> {
+        let mut registry = Registry::new();
+        registry.register(Schema::from_serde(serde_json::from_value(json!({
+            "elements": { "type": "string" },
+        }))?)?)?;
+
+        let mut config = Config::new();
+        config.max_errors(3);
+
+        let validator = Validator::new_with_config(config, &registry);
+        assert_eq!(
+            validator
+                .validate(&json!([null, null, null, null, null,]))
+                .unwrap()
+                .len(),
+            3
+        );
+
+        Ok(())
+    }
+}
