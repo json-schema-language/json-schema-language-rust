@@ -59,6 +59,7 @@ impl<'a> Validator<'a> {
         validate(
             self.config.max_errors,
             self.config.max_depth,
+            self.config.strict_instance_semantics,
             self.registry,
             id,
             instance,
@@ -70,6 +71,7 @@ impl<'a> Validator<'a> {
 pub struct Config {
     max_errors: usize,
     max_depth: usize,
+    strict_instance_semantics: bool,
 }
 
 impl Config {
@@ -100,6 +102,19 @@ impl Config {
         self.max_depth = max_depth;
         self
     }
+
+    /// Sets whether to use strict instance semantics. The default is to not use
+    /// strict instance semantics.
+    ///
+    /// Essentially, strict instance semantics determines whether it's ok for an
+    /// instance (input) to have properties not mentioned in a schema. When
+    /// using strict instance semantics, these undeclared properties will be
+    /// considered erroneuous. In non-strict instance semantics, these
+    /// properties are simply ignored.
+    pub fn strict_instance_semantics(&mut self, strict_instance_semantics: bool) -> &mut Self {
+        self.strict_instance_semantics = strict_instance_semantics;
+        self
+    }
 }
 
 impl Default for Config {
@@ -107,6 +122,7 @@ impl Default for Config {
         Self {
             max_errors: 0,
             max_depth: 32,
+            strict_instance_semantics: false,
         }
     }
 }

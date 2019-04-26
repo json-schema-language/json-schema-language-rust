@@ -1,4 +1,4 @@
-use jsl::{Registry, Schema, SerdeSchema, Validator};
+use jsl::{Config, Registry, Schema, SerdeSchema, Validator};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs;
@@ -8,6 +8,8 @@ struct TestSuite {
     name: String,
     registry: Vec<SerdeSchema>,
     schema: SerdeSchema,
+    #[serde(rename = "strictInstance")]
+    strict_instance: bool,
     instances: Vec<TestCase>,
 }
 
@@ -51,7 +53,10 @@ fn spec() -> Result<(), std::io::Error> {
                 registry.register(schema).expect("error registering schema");
             }
 
-            let validator = Validator::new(&registry);
+            let mut config = Config::new();
+            config.strict_instance_semantics(suite.strict_instance);
+
+            let validator = Validator::new_with_config(config, &registry);
 
             for (j, mut test_case) in suite.instances.into_iter().enumerate() {
                 println!("{}/{}", i, j);

@@ -11,6 +11,7 @@ use url::Url;
 pub fn validate<'a>(
     max_failures: usize,
     max_depth: usize,
+    strict_instance_semantics: bool,
     registry: &'a Registry,
     id: &'a Option<Url>,
     instance: &'a Value,
@@ -22,6 +23,7 @@ pub fn validate<'a>(
     let mut vm = Vm {
         max_failures,
         max_depth,
+        strict_instance_semantics,
         registry,
         instance_tokens: Vec::new(),
         schemas: vec![(id, vec![])],
@@ -34,7 +36,7 @@ pub fn validate<'a>(
         bail!(JslError::NoSuchSchema);
     };
 
-    match vm.eval(schema, instance) {
+    match vm.eval(schema, instance, None) {
         Ok(()) | Err(EvalError::Internal) => Ok(vm.errors),
         Err(EvalError::Actual(error)) => Err(error),
     }
@@ -48,6 +50,7 @@ enum EvalError {
 struct Vm<'a> {
     max_failures: usize,
     max_depth: usize,
+    strict_instance_semantics: bool,
     registry: &'a Registry,
     instance_tokens: Vec<Cow<'a, str>>,
     schemas: Vec<(&'a Option<Url>, Vec<Cow<'a, str>>)>,
@@ -55,7 +58,12 @@ struct Vm<'a> {
 }
 
 impl<'a> Vm<'a> {
-    fn eval(&mut self, schema: &'a Schema, instance: &'a Value) -> Result<(), EvalError> {
+    fn eval(
+        &mut self,
+        schema: &'a Schema,
+        instance: &'a Value,
+        parent_tag: Option<&'a str>,
+    ) -> Result<(), EvalError> {
         match schema.form() {
             Form::Empty => {}
             Form::Ref(ref id, ref def) => {
@@ -88,7 +96,7 @@ impl<'a> Vm<'a> {
                 };
 
                 self.schemas.push((id, schema_tokens));
-                self.eval(refd_schema, instance)?;
+                self.eval(refd_schema, instance, None)?;
             }
             Form::Type(typ) => match typ {
                 Type::Null => {
@@ -125,7 +133,7 @@ impl<'a> Vm<'a> {
                 if let Some(arr) = instance.as_array() {
                     for (i, elem) in arr.iter().enumerate() {
                         self.push_instance_token(Cow::Owned(i.to_string()));
-                        self.eval(sub_schema, elem)?;
+                        self.eval(sub_schema, elem, None)?;
                         self.pop_instance_token();
                     }
                 } else {
@@ -140,7 +148,7 @@ impl<'a> Vm<'a> {
                         self.push_schema_token(property);
                         if let Some(sub_instance) = obj.get(property) {
                             self.push_instance_token(property);
-                            self.eval(sub_schema, sub_instance)?;
+                            self.eval(sub_schema, sub_instance, None)?;
                             self.pop_instance_token();
                         } else {
                             self.push_err()?;
@@ -154,12 +162,35 @@ impl<'a> Vm<'a> {
                         self.push_schema_token(property);
                         if let Some(sub_instance) = obj.get(property) {
                             self.push_instance_token(property);
-                            self.eval(sub_schema, sub_instance)?;
+                            self.eval(sub_schema, sub_instance, None)?;
                             self.pop_instance_token();
                         }
                         self.pop_schema_token();
                     }
                     self.pop_schema_token();
+
+                    if self.strict_instance_semantics {
+                        if *has_required {
+                            self.push_schema_token("properties");
+                        } else {
+                            self.push_schema_token("optionalProperties");
+                        }
+
+                        for key in obj.keys() {
+                            let parent_match = parent_tag.map(|tag| key == tag).unwrap_or(false);
+
+                            if !parent_match
+                                && !required.contains_key(key)
+                                && !optional.contains_key(key)
+                            {
+                                self.push_instance_token(key);
+                                self.push_err()?;
+                                self.pop_instance_token();
+                            }
+                        }
+
+                        self.pop_schema_token();
+                    }
                 } else {
                     // Sort of a weird corner-case in the spec: you have to
                     // check if the instance is an object at all. If it isn't,
@@ -181,7 +212,7 @@ impl<'a> Vm<'a> {
                 if let Some(obj) = instance.as_object() {
                     for (property, sub_instance) in obj {
                         self.push_instance_token(property);
-                        self.eval(sub_schema, sub_instance)?;
+                        self.eval(sub_schema, sub_instance, None)?;
                         self.pop_instance_token();
                     }
                 } else {
@@ -197,7 +228,7 @@ impl<'a> Vm<'a> {
                             if let Some(sub_schema) = mapping.get(instance_tag) {
                                 self.push_schema_token("mapping");
                                 self.push_schema_token(instance_tag);
-                                self.eval(sub_schema, instance)?;
+                                self.eval(sub_schema, instance, Some(tag))?;
                                 self.pop_schema_token();
                                 self.pop_schema_token();
                             } else {
