@@ -1,4 +1,4 @@
-use jsl::{Config, Registry, Schema, SerdeSchema, Validator};
+use jsl::{Config, Schema, SerdeSchema, Validator};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs;
@@ -6,7 +6,6 @@ use std::fs;
 #[derive(Deserialize)]
 struct TestSuite {
     name: String,
-    registry: Vec<SerdeSchema>,
     schema: SerdeSchema,
     #[serde(rename = "strictInstance")]
     strict_instance: bool,
@@ -26,9 +25,6 @@ struct TestCaseError {
 
     #[serde(rename = "schemaPath")]
     schema_path: String,
-
-    #[serde(rename = "schemaURI")]
-    schema_id: Option<String>,
 }
 
 #[test]
@@ -46,35 +42,23 @@ fn spec() -> Result<(), std::io::Error> {
         for (i, suite) in suites.into_iter().enumerate() {
             println!("{}: {}", i, suite.name);
 
-            let mut registry = Registry::new();
-            for serde_schema in suite.registry.iter().chain(&[suite.schema]) {
-                let schema =
-                    Schema::from_serde(serde_schema.clone()).expect("error creating schema");
-                registry.register(schema).expect("error registering schema");
-            }
+            let schema = Schema::from_serde(suite.schema).expect("error parsing schema");
 
             let mut config = Config::new();
             config.strict_instance_semantics(suite.strict_instance);
 
-            let validator = Validator::new_with_config(config, &registry);
+            let validator = Validator::new_with_config(config);
 
             for (j, mut test_case) in suite.instances.into_iter().enumerate() {
                 println!("{}/{}", i, j);
 
                 let mut actual_errors: Vec<_> = validator
-                    .validate(&test_case.instance)
+                    .validate(&schema, &test_case.instance)
                     .expect("error validating instance")
                     .into_iter()
                     .map(|error| TestCaseError {
                         instance_path: error.instance_path().to_string(),
                         schema_path: error.schema_path().to_string(),
-                        schema_id: Some(
-                            error
-                                .schema_id()
-                                .as_ref()
-                                .map(|id| id.to_string())
-                                .unwrap_or("".to_owned()),
-                        ),
                     })
                     .collect();
 

@@ -6,68 +6,55 @@
 //!
 //! See the docs for [`Validator`](struct.Validator.html) for more.
 
-use crate::registry::Registry;
+use crate::schema::Schema;
 use crate::vm::validate;
 use failure::Error;
 use json_pointer::JsonPointer;
 use std::borrow::Cow;
-use url::Url;
 
-/// Validates instances against a registry of schemas.
-pub struct Validator<'a> {
+/// Validates instances against schemas.
+#[derive(Debug, Default, Eq, PartialEq, Clone, Hash)]
+pub struct Validator {
     config: Config,
-    registry: &'a Registry,
 }
 
-impl<'a> Validator<'a> {
-    /// Constructs a new validator using a registry and the default
-    /// configuration.
-    pub fn new(registry: &'a Registry) -> Self {
-        Self::new_with_config(Config::default(), registry)
+impl Validator {
+    /// Constructs a new validator using the default configuration.
+    pub fn new() -> Self {
+        Self::new_with_config(Config::default())
     }
 
-    /// Constructs a new validator using a registry and configuration.
-    pub fn new_with_config(config: Config, registry: &'a Registry) -> Self {
-        Self { config, registry }
+    /// Constructs a new validator using a configuration.
+    pub fn new_with_config(config: Config) -> Self {
+        Self { config }
     }
 
-    /// Validate an instance against the default schema the registry.
+    /// Validate an instance against a schema.
     ///
-    /// See [`validate_by_uri`](#method.validate_by_uri) for possible error
-    /// conditions.
-    pub fn validate(
-        &'a self,
-        instance: &'a serde_json::Value,
-    ) -> Result<Vec<ValidationError<'a>>, Error> {
-        self.validate_by_id(&None, instance)
-    }
-
-    /// Validate an instance against the schema with the given URI.
+    /// The generated validation errors have the same lifetime as the inputted
+    /// instance; this crate avoids copying data out of your inputted data.
+    /// Despite having "Error" in their name, they are not Rust errors. A list
+    /// of validation errors is the _successful_ result of running `validate`.
     ///
-    /// Returns an error if the registry is currently unsealed (see
-    /// [`Registry::is_sealed`](../registry/struct.Registry.html#method.is_sealed)), or if
-    /// the maximum reference depth is exceeded (see
+    /// Returns an error if if the maximum reference depth is exceeded (see
     /// [`ValidatorConfig::max_depth`](struct.ValidatorConfig.html#method.max_depth)).
-    ///
-    /// The generated errors have the same lifetime as the inputted instance;
-    /// this crate avoids copying data out of your inputted data.
-    pub fn validate_by_id(
-        &'a self,
-        id: &'a Option<Url>,
+    pub fn validate<'a>(
+        &self,
+        schema: &'a Schema,
         instance: &'a serde_json::Value,
     ) -> Result<Vec<ValidationError<'a>>, Error> {
         validate(
             self.config.max_errors,
             self.config.max_depth,
             self.config.strict_instance_semantics,
-            self.registry,
-            id,
+            schema,
             instance,
         )
     }
 }
 
 /// Configuration for how validation should proceed.
+#[derive(Debug, Eq, PartialEq, Clone, Hash)]
 pub struct Config {
     max_errors: usize,
     max_depth: usize,
@@ -142,19 +129,16 @@ impl Default for Config {
 pub struct ValidationError<'a> {
     instance_path: JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>>,
     schema_path: JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>>,
-    schema_id: &'a Option<Url>,
 }
 
 impl<'a> ValidationError<'a> {
     pub fn new(
         instance_path: JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>>,
         schema_path: JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>>,
-        schema_id: &'a Option<Url>,
     ) -> ValidationError<'a> {
         ValidationError {
             instance_path,
             schema_path,
-            schema_id,
         }
     }
 
@@ -167,12 +151,6 @@ impl<'a> ValidationError<'a> {
     pub fn schema_path(&self) -> &JsonPointer<Cow<'a, str>, Vec<Cow<'a, str>>> {
         &self.schema_path
     }
-
-    /// The ID of the schema which rejected the instance. If the schema
-    /// doesn't have an ID, then this is None.
-    pub fn schema_id(&self) -> &Option<Url> {
-        &self.schema_id
-    }
 }
 
 #[cfg(test)]
@@ -183,31 +161,36 @@ mod test {
 
     #[test]
     fn infinite_loop() -> Result<(), Error> {
-        let mut registry = Registry::new();
-        registry.register(Schema::from_serde(serde_json::from_value(json!({
-            "ref": "#",
-        }))?)?)?;
-
-        let validator = Validator::new(&registry);
-        assert!(validator.validate(&json!({})).is_err());
+        let validator = Validator::new();
+        assert!(validator
+            .validate(
+                &Schema::from_serde(serde_json::from_value(json!({
+                    "definitions": {
+                        "a": { "ref": "a" },
+                    },
+                    "ref": "a",
+                }))?)?,
+                &json!({})
+            )
+            .is_err());
 
         Ok(())
     }
 
     #[test]
     fn max_errors() -> Result<(), Error> {
-        let mut registry = Registry::new();
-        registry.register(Schema::from_serde(serde_json::from_value(json!({
-            "elements": { "type": "string" },
-        }))?)?)?;
-
         let mut config = Config::new();
         config.max_errors(3);
 
-        let validator = Validator::new_with_config(config, &registry);
+        let validator = Validator::new_with_config(config);
         assert_eq!(
             validator
-                .validate(&json!([null, null, null, null, null,]))
+                .validate(
+                    &Schema::from_serde(serde_json::from_value(json!({
+                        "elements": { "type": "string" },
+                    }))?)?,
+                    &json!([null, null, null, null, null,])
+                )
                 .unwrap()
                 .len(),
             3

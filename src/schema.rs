@@ -8,9 +8,7 @@ use crate::errors::JslError;
 use failure::{bail, Error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::borrow::ToOwned;
-use std::collections::HashMap;
-use url::Url;
+use std::collections::{HashMap, HashSet};
 
 /// An abstract representation of a JSL schema.
 ///
@@ -19,86 +17,38 @@ use url::Url;
 /// schemas, instead use [`Serde`](struct.Serde.html).
 #[derive(Clone, PartialEq, Debug)]
 pub struct Schema {
-    root: Option<RootData>,
+    defs: Option<HashMap<String, Schema>>,
     form: Box<Form>,
     extra: HashMap<String, Value>,
 }
 
 impl Schema {
-    /// Construct a new, non-root, empty-form schema without any extra data.
-    pub fn new_empty() -> Self {
-        Self {
-            root: None,
-            form: Box::new(Form::Empty),
-            extra: HashMap::new(),
-        }
-    }
-
     /// Construct a new, root schema from a `Serde`.
-    pub fn from_serde(serde_schema: Serde) -> Result<Self, Error> {
-        let base = if let Some(ref id) = serde_schema.id {
-            Some(id.parse()?)
-        } else {
-            None
-        };
+    pub fn from_serde(mut serde_schema: Serde) -> Result<Self, Error> {
+        let mut defs = HashMap::new();
+        let serde_defs = serde_schema.defs;
+        serde_schema.defs = None;
 
-        Self::_from_serde(&base, true, serde_schema)
+        for (name, sub_schema) in serde_defs.unwrap_or_default() {
+            defs.insert(name, Self::_from_serde(sub_schema)?);
+        }
+
+        let mut schema = Self::_from_serde(serde_schema)?;
+        schema.defs = Some(defs);
+
+        Self::check_refs(&schema.defs.as_ref().unwrap(), &schema)?;
+        for sub_schema in schema.defs.as_ref().unwrap().values() {
+            Self::check_refs(&schema.defs.as_ref().unwrap(), &sub_schema)?;
+        }
+
+        Ok(schema)
     }
 
-    fn _from_serde(base: &Option<Url>, root: bool, serde_schema: Serde) -> Result<Self, Error> {
-        let root = if root {
-            let defs = if let Some(defs) = serde_schema.defs {
-                let mut out = HashMap::new();
-                for (name, sub_schema) in defs {
-                    out.insert(name, Self::_from_serde(base, false, sub_schema)?);
-                }
-
-                out
-            } else {
-                HashMap::new()
-            };
-
-            Some(RootData {
-                id: base.clone(),
-                defs,
-            })
-        } else {
-            None
-        };
-
+    fn _from_serde(serde_schema: Serde) -> Result<Self, Error> {
         let mut form = Form::Empty;
 
         if let Some(rxf) = serde_schema.rxf {
-            let (uri, def) = if let Some(ref base) = base {
-                let mut resolved = base.join(&rxf)?;
-                let frag = resolved.fragment().and_then(|f| {
-                    if f.is_empty() {
-                        None
-                    } else {
-                        Some(f.to_owned())
-                    }
-                });
-                resolved.set_fragment(None);
-
-                (Some(resolved), frag)
-            } else {
-                // There is no base URI. Either the reference is intra-document
-                // (just a fragment, and thus is empty or starts with "#"), or
-                // it can be parsed as an absolute URI.
-                if rxf.is_empty() || rxf == "#" {
-                    (None, None)
-                } else if rxf.starts_with('#') {
-                    (None, Some(rxf[1..].to_owned()))
-                } else {
-                    let mut resolved: Url = rxf.parse()?;
-                    let frag = resolved.fragment().map(ToOwned::to_owned);
-                    resolved.set_fragment(None);
-
-                    (Some(resolved), frag)
-                }
-            };
-
-            form = Form::Ref(uri, def)
+            form = Form::Ref(rxf);
         }
 
         if let Some(typ) = serde_schema.typ {
@@ -107,12 +57,33 @@ impl Schema {
             }
 
             form = Form::Type(match typ.as_ref() {
-                "null" => Type::Null,
                 "boolean" => Type::Boolean,
                 "number" => Type::Number,
                 "string" => Type::String,
+                "timestamp" => Type::Timestamp,
                 _ => bail!(JslError::InvalidForm),
             });
+        }
+
+        if let Some(enm) = serde_schema.enm {
+            if form != Form::Empty {
+                bail!(JslError::InvalidForm);
+            }
+
+            let mut values = HashSet::new();
+            for val in enm {
+                if values.contains(&val) {
+                    bail!(JslError::InvalidForm);
+                } else {
+                    values.insert(val);
+                }
+            }
+
+            if values.is_empty() {
+                bail!(JslError::InvalidForm);
+            }
+
+            form = Form::Enum(values);
         }
 
         if let Some(elements) = serde_schema.elems {
@@ -120,7 +91,7 @@ impl Schema {
                 bail!(JslError::InvalidForm);
             }
 
-            form = Form::Elements(Self::_from_serde(base, false, *elements)?);
+            form = Form::Elements(Self::_from_serde(*elements)?);
         }
 
         if serde_schema.props.is_some() || serde_schema.opt_props.is_some() {
@@ -132,7 +103,7 @@ impl Schema {
 
             let mut required = HashMap::new();
             for (name, sub_schema) in serde_schema.props.unwrap_or_default() {
-                required.insert(name, Self::_from_serde(base, false, sub_schema)?);
+                required.insert(name, Self::_from_serde(sub_schema)?);
             }
 
             let mut optional = HashMap::new();
@@ -141,7 +112,7 @@ impl Schema {
                     bail!(JslError::AmbiguousProperty { property: name });
                 }
 
-                optional.insert(name, Self::_from_serde(base, false, sub_schema)?);
+                optional.insert(name, Self::_from_serde(sub_schema)?);
             }
 
             form = Form::Properties(required, optional, has_required);
@@ -152,7 +123,7 @@ impl Schema {
                 bail!(JslError::InvalidForm);
             }
 
-            form = Form::Values(Self::_from_serde(base, false, *values)?);
+            form = Form::Values(Self::_from_serde(*values)?);
         }
 
         if let Some(discriminator) = serde_schema.discriminator {
@@ -162,7 +133,7 @@ impl Schema {
 
             let mut mapping = HashMap::new();
             for (name, sub_schema) in discriminator.mapping {
-                let sub_schema = Self::_from_serde(base, false, sub_schema)?;
+                let sub_schema = Self::_from_serde(sub_schema)?;
                 match sub_schema.form.as_ref() {
                     Form::Properties(required, optional, _) => {
                         if required.contains_key(&discriminator.tag)
@@ -183,50 +154,65 @@ impl Schema {
         }
 
         Ok(Self {
-            root,
+            defs: None,
             form: Box::new(form),
             extra: HashMap::new(),
         })
     }
 
+    fn check_refs(defs: &HashMap<String, Schema>, schema: &Schema) -> Result<(), Error> {
+        match schema.form() {
+            Form::Ref(ref def) => {
+                if !defs.contains_key(def) {
+                    bail!(JslError::NoSuchDefinition {
+                        definition: def.clone()
+                    })
+                }
+            }
+            Form::Elements(ref schema) => {
+                Self::check_refs(defs, schema)?;
+            }
+            Form::Properties(ref required, ref optional, _) => {
+                for schema in required.values() {
+                    Self::check_refs(defs, schema)?;
+                }
+
+                for schema in optional.values() {
+                    Self::check_refs(defs, schema)?;
+                }
+            }
+            Form::Values(ref schema) => {
+                Self::check_refs(defs, schema)?;
+            }
+            Form::Discriminator(_, ref mapping) => {
+                for schema in mapping.values() {
+                    Self::check_refs(defs, schema)?;
+                }
+            }
+            _ => {}
+        };
+
+        Ok(())
+    }
+
     /// Is this schema a root schema?
     ///
     /// Under the hood, this is entirely equivalent to checking whether
-    /// `root_data().is_some()`.
+    /// `defs().is_some()`.
     pub fn is_root(&self) -> bool {
-        self.root.is_some()
+        self.defs.is_some()
     }
 
-    /// Get the root data associated with this schema.
+    /// Get the definitions associated with this schema.
     ///
     /// If this schema is non-root, this returns None.
-    pub fn root_data(&self) -> &Option<RootData> {
-        &self.root
-    }
-
-    /// Same as [`root_data`](#method.root_data), but takes a mutable reference.
-    pub fn root_data_mut(&mut self) -> &mut Option<RootData> {
-        &mut self.root
-    }
-
-    /// Same as [`root_data`](#method.root_data), but moves ownership.
-    pub fn root_data_root(self) -> Option<RootData> {
-        self.root
+    pub fn definitions(&self) -> &Option<HashMap<String, Schema>> {
+        &self.defs
     }
 
     /// Get the form of the schema.
     pub fn form(&self) -> &Form {
         &self.form
-    }
-
-    /// Same as [`form`](#method.form), but takes a mutable reference.
-    pub fn form_mut(&mut self) -> &mut Form {
-        &mut self.form
-    }
-
-    /// Same as [`form`](#method.form), but moves ownership.
-    pub fn into_form(self) -> Form {
-        *self.form
     }
 
     /// Get the extra data on the schema.
@@ -251,54 +237,6 @@ impl Schema {
     }
 }
 
-/// Data relevant only for root schemas.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RootData {
-    id: Option<Url>,
-    defs: HashMap<String, Schema>,
-}
-
-impl RootData {
-    /// Is this schema anonymous?
-    ///
-    /// A schema is anonymous when it lacks an `id` keyword. This function is
-    /// just convenience for `id().is_none()`.
-    pub fn is_anonymous(&self) -> bool {
-        self.id.is_none()
-    }
-
-    /// Get the id of the schema.
-    pub fn id(&self) -> &Option<Url> {
-        &self.id
-    }
-
-    /// Same as [`id`](#method.id), but takes a mutable reference.
-    pub fn id_mut(&mut self) -> &mut Option<Url> {
-        &mut self.id
-    }
-
-    /// Same as [`id`](#method.id), but moves ownership.
-    pub fn into_id(self) -> Option<Url> {
-        self.id
-    }
-
-    /// Get the definitions of the schema.
-    pub fn definitions(&self) -> &HashMap<String, Schema> {
-        &self.defs
-    }
-
-    /// Same as [`definitions`](#method.definitions), but takes a mutable
-    /// reference.
-    pub fn definitions_mut(&mut self) -> &mut HashMap<String, Schema> {
-        &mut self.defs
-    }
-
-    /// Same as [`definitions`](#method.definitions), but moves ownership.
-    pub fn into_definitions(self) -> HashMap<String, Schema> {
-        self.defs
-    }
-}
-
 /// The various forms which a schema may take on, and their respective data.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Form {
@@ -310,20 +248,20 @@ pub enum Form {
     /// The ref form.
     ///
     /// This schema refers to another schema, and does whatever that other
-    /// schema does.
-    ///
-    /// The first parameter is the URI of the root schema that the referred-to
-    /// schema belongs to. It is None if the schema referred to lacks an ID.
-    ///
-    /// The second parameter is the definition of the referred-to schema. If the
-    /// reference isn't to any definition at all (i.e. the reference is to a
-    /// root schema, not a definition), then it is None.
-    Ref(Option<Url>, Option<String>),
+    /// schema does. The contained string is the name of the definition of the
+    /// referred-to schema -- it is an index into the `defs` of the root schema.
+    Ref(String),
 
     /// The type form.
     ///
     /// This schema asserts that the data is one of the primitive types.
     Type(Type),
+
+    /// The enum form.
+    ///
+    /// This schema asserts that the data is a string, and that it is one of a
+    /// set of values.
+    Enum(HashSet<String>),
 
     /// The elements form.
     ///
@@ -368,11 +306,8 @@ pub enum Form {
 /// In a certain sense, you can consider these types to be JSON's "primitive"
 /// types, with the remaining two types, arrays and objects, being the "complex"
 /// types covered by other keywords.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
-    /// The "null" JSON value.
-    Null,
-
     /// The "true" or "false" JSON values.
     Boolean,
 
@@ -384,6 +319,9 @@ pub enum Type {
 
     /// Any JSON string.
     String,
+
+    /// A string encoding an RFC3339 timestamp.
+    Timestamp,
 }
 
 /// A serialization/deserialization-friendly representation of a JSL schema.
@@ -396,9 +334,6 @@ pub enum Type {
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
 pub struct Serde {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "definitions")]
     pub defs: Option<HashMap<String, Serde>>,
 
@@ -409,6 +344,10 @@ pub struct Serde {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "type")]
     pub typ: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "enum")]
+    pub enm: Option<Vec<String>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "elements")]
@@ -453,12 +392,15 @@ mod tests {
     #[test]
     fn roundtrip_json() {
         let data = r#"{
-  "id": "http://example.com/foo",
   "definitions": {
     "a": {}
   },
   "ref": "http://example.com/bar",
   "type": "foo",
+  "enum": [
+    "FOO",
+    "BAR"
+  ],
   "elements": {},
   "properties": {
     "a": {}
@@ -480,7 +422,6 @@ mod tests {
         assert_eq!(
             parsed,
             Serde {
-                id: Some("http://example.com/foo".to_owned()),
                 rxf: Some("http://example.com/bar".to_owned()),
                 defs: Some(
                     [("a".to_owned(), Serde::default())]
@@ -489,6 +430,7 @@ mod tests {
                         .collect()
                 ),
                 typ: Some("foo".to_owned()),
+                enm: Some(vec!["FOO".to_owned(), "BAR".to_owned()]),
                 elems: Some(Box::new(Serde::default())),
                 props: Some(
                     [("a".to_owned(), Serde::default())]
@@ -526,29 +468,27 @@ mod tests {
         assert_eq!(
             Schema::from_serde(
                 serde_json::from_value(json!({
-                    "id": "http://example.com/foo",
                     "definitions": {
-                        "a": { "type": "null" }
+                        "a": { "type": "boolean" }
                     }
                 }))
                 .unwrap()
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: Some("http://example.com/foo".parse().unwrap()),
-                    defs: [(
+                defs: Some(
+                    [(
                         "a".to_owned(),
                         Schema {
-                            root: None,
-                            form: Box::new(Form::Type(Type::Null)),
+                            defs: None,
+                            form: Box::new(Form::Type(Type::Boolean)),
                             extra: HashMap::new(),
                         },
                     )]
                     .iter()
                     .cloned()
-                    .collect(),
-                }),
+                    .collect()
+                ),
                 form: Box::new(Form::Empty),
                 extra: HashMap::new()
             }
@@ -560,10 +500,7 @@ mod tests {
         assert_eq!(
             Schema::from_serde(serde_json::from_value(json!({})).unwrap()).unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
+                defs: Some(HashMap::new()),
                 form: Box::new(Form::Empty),
                 extra: HashMap::new(),
             }
@@ -575,170 +512,47 @@ mod tests {
         assert_eq!(
             Schema::from_serde(
                 serde_json::from_value(json!({
-                    "ref": ""
+                    "definitions": {
+                        "a": { "type": "boolean" }
+                    },
+                    "ref": "a",
                 }))
                 .unwrap()
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
-                form: Box::new(Form::Ref(None, None)),
+                defs: Some(
+                    [(
+                        "a".to_owned(),
+                        Schema {
+                            defs: None,
+                            form: Box::new(Form::Type(Type::Boolean)),
+                            extra: HashMap::new(),
+                        },
+                    )]
+                    .iter()
+                    .cloned()
+                    .collect()
+                ),
+                form: Box::new(Form::Ref("a".to_owned())),
                 extra: HashMap::new(),
             }
         );
 
-        assert_eq!(
-            Schema::from_serde(
-                serde_json::from_value(json!({
-                    "ref": "#"
-                }))
-                .unwrap()
-            )
-            .unwrap(),
-            Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
-                form: Box::new(Form::Ref(None, None)),
-                extra: HashMap::new(),
-            }
-        );
-
-        assert_eq!(
-            Schema::from_serde(
-                serde_json::from_value(json!({
-                    "id": "http://example.com/foo",
-                    "ref": ""
-                }))
-                .unwrap()
-            )
-            .unwrap(),
-            Schema {
-                root: Some(RootData {
-                    id: Some("http://example.com/foo".parse().unwrap()),
-                    defs: HashMap::new(),
-                }),
-                form: Box::new(Form::Ref(
-                    Some("http://example.com/foo".parse().unwrap()),
-                    None
-                )),
-                extra: HashMap::new(),
-            }
-        );
-
-        assert_eq!(
-            Schema::from_serde(
-                serde_json::from_value(json!({
-                    "id": "http://example.com/foo",
-                    "ref": "#"
-                }))
-                .unwrap()
-            )
-            .unwrap(),
-            Schema {
-                root: Some(RootData {
-                    id: Some("http://example.com/foo".parse().unwrap()),
-                    defs: HashMap::new(),
-                }),
-                form: Box::new(Form::Ref(
-                    Some("http://example.com/foo".parse().unwrap()),
-                    None
-                )),
-                extra: HashMap::new(),
-            }
-        );
-
-        assert_eq!(
-            Schema::from_serde(
-                serde_json::from_value(json!({
-                    "id": "http://example.com/foo",
-                    "ref": "/bar"
-                }))
-                .unwrap()
-            )
-            .unwrap(),
-            Schema {
-                root: Some(RootData {
-                    id: Some("http://example.com/foo".parse().unwrap()),
-                    defs: HashMap::new(),
-                }),
-                form: Box::new(Form::Ref(
-                    Some("http://example.com/bar".parse().unwrap()),
-                    None
-                )),
-                extra: HashMap::new(),
-            }
-        );
-
-        assert_eq!(
-            Schema::from_serde(
-                serde_json::from_value(json!({
-                    "id": "http://example.com/foo",
-                    "ref": "#asdf"
-                }))
-                .unwrap()
-            )
-            .unwrap(),
-            Schema {
-                root: Some(RootData {
-                    id: Some("http://example.com/foo".parse().unwrap()),
-                    defs: HashMap::new(),
-                }),
-                form: Box::new(Form::Ref(
-                    Some("http://example.com/foo".parse().unwrap()),
-                    Some("asdf".to_owned()),
-                )),
-                extra: HashMap::new(),
-            }
-        );
-
-        assert_eq!(
-            Schema::from_serde(
-                serde_json::from_value(json!({
-                    "id": "http://example.com/foo",
-                    "ref": "/bar#asdf"
-                }))
-                .unwrap()
-            )
-            .unwrap(),
-            Schema {
-                root: Some(RootData {
-                    id: Some("http://example.com/foo".parse().unwrap()),
-                    defs: HashMap::new(),
-                }),
-                form: Box::new(Form::Ref(
-                    Some("http://example.com/bar".parse().unwrap()),
-                    Some("asdf".to_owned()),
-                )),
-                extra: HashMap::new(),
-            }
-        );
+        assert!(Schema::from_serde(
+            serde_json::from_value(json!({
+                "definitions": {
+                    "a": { "type": "boolean" }
+                },
+                "ref": "",
+            }))
+            .unwrap()
+        )
+        .is_err());
     }
 
     #[test]
     fn from_serde_type() {
-        assert_eq!(
-            Schema::from_serde(
-                serde_json::from_value(json!({
-                    "type": "null",
-                }))
-                .unwrap()
-            )
-            .unwrap(),
-            Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
-                form: Box::new(Form::Type(Type::Null)),
-                extra: HashMap::new(),
-            },
-        );
-
         assert_eq!(
             Schema::from_serde(
                 serde_json::from_value(json!({
@@ -748,10 +562,7 @@ mod tests {
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
+                defs: Some(HashMap::new()),
                 form: Box::new(Form::Type(Type::Boolean)),
                 extra: HashMap::new(),
             },
@@ -766,10 +577,7 @@ mod tests {
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
+                defs: Some(HashMap::new()),
                 form: Box::new(Form::Type(Type::Number)),
                 extra: HashMap::new(),
             },
@@ -784,11 +592,23 @@ mod tests {
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
+                defs: Some(HashMap::new()),
                 form: Box::new(Form::Type(Type::String)),
+                extra: HashMap::new(),
+            },
+        );
+
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "type": "timestamp",
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                defs: Some(HashMap::new()),
+                form: Box::new(Form::Type(Type::Timestamp)),
                 extra: HashMap::new(),
             },
         );
@@ -803,25 +623,61 @@ mod tests {
     }
 
     #[test]
+    fn from_serde_enum() {
+        assert_eq!(
+            Schema::from_serde(
+                serde_json::from_value(json!({
+                    "enum": ["FOO", "BAR"],
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            Schema {
+                defs: Some(HashMap::new()),
+                form: Box::new(Form::Enum(
+                    vec!["FOO".to_owned(), "BAR".to_owned()]
+                        .iter()
+                        .cloned()
+                        .collect()
+                )),
+                extra: HashMap::new(),
+            },
+        );
+
+        assert!(Schema::from_serde(
+            serde_json::from_value(json!({
+                "enum": [],
+            }))
+            .unwrap()
+        )
+        .is_err());
+
+        assert!(Schema::from_serde(
+            serde_json::from_value(json!({
+                "enum": ["FOO", "FOO"],
+            }))
+            .unwrap()
+        )
+        .is_err());
+    }
+
+    #[test]
     fn from_serde_elements() {
         assert_eq!(
             Schema::from_serde(
                 serde_json::from_value(json!({
                     "elements": {
-                        "type": "null",
+                        "type": "boolean",
                     },
                 }))
                 .unwrap()
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
+                defs: Some(HashMap::new()),
                 form: Box::new(Form::Elements(Schema {
-                    root: None,
-                    form: Box::new(Form::Type(Type::Null)),
+                    defs: None,
+                    form: Box::new(Form::Type(Type::Boolean)),
                     extra: HashMap::new(),
                 })),
                 extra: HashMap::new(),
@@ -835,26 +691,23 @@ mod tests {
             Schema::from_serde(
                 serde_json::from_value(json!({
                     "properties": {
-                        "a": { "type": "null" },
+                        "a": { "type": "boolean" },
                     },
                     "optionalProperties": {
-                        "b": { "type": "null" },
+                        "b": { "type": "boolean" },
                     },
                 }))
                 .unwrap()
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
+                defs: Some(HashMap::new()),
                 form: Box::new(Form::Properties(
                     [(
                         "a".to_owned(),
                         Schema {
-                            root: None,
-                            form: Box::new(Form::Type(Type::Null)),
+                            defs: None,
+                            form: Box::new(Form::Type(Type::Boolean)),
                             extra: HashMap::new(),
                         }
                     )]
@@ -864,8 +717,8 @@ mod tests {
                     [(
                         "b".to_owned(),
                         Schema {
-                            root: None,
-                            form: Box::new(Form::Type(Type::Null)),
+                            defs: None,
+                            form: Box::new(Form::Type(Type::Boolean)),
                             extra: HashMap::new(),
                         }
                     )]
@@ -882,24 +735,21 @@ mod tests {
             Schema::from_serde(
                 serde_json::from_value(json!({
                     "optionalProperties": {
-                        "b": { "type": "null" },
+                        "b": { "type": "boolean" },
                     },
                 }))
                 .unwrap()
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
+                defs: Some(HashMap::new()),
                 form: Box::new(Form::Properties(
                     HashMap::new(),
                     [(
                         "b".to_owned(),
                         Schema {
-                            root: None,
-                            form: Box::new(Form::Type(Type::Null)),
+                            defs: None,
+                            form: Box::new(Form::Type(Type::Boolean)),
                             extra: HashMap::new(),
                         }
                     )]
@@ -915,10 +765,10 @@ mod tests {
         assert!(Schema::from_serde(
             serde_json::from_value(json!({
                 "properties": {
-                    "a": { "type": "null" },
+                    "a": { "type": "boolean" },
                 },
                 "optionalProperties": {
-                    "a": { "type": "null" },
+                    "a": { "type": "boolean" },
                 },
             }))
             .unwrap()
@@ -932,20 +782,17 @@ mod tests {
             Schema::from_serde(
                 serde_json::from_value(json!({
                     "values": {
-                        "type": "null",
+                        "type": "boolean",
                     },
                 }))
                 .unwrap()
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
+                defs: Some(HashMap::new()),
                 form: Box::new(Form::Values(Schema {
-                    root: None,
-                    form: Box::new(Form::Type(Type::Null)),
+                    defs: None,
+                    form: Box::new(Form::Type(Type::Boolean)),
                     extra: HashMap::new(),
                 })),
                 extra: HashMap::new(),
@@ -970,17 +817,14 @@ mod tests {
             )
             .unwrap(),
             Schema {
-                root: Some(RootData {
-                    id: None,
-                    defs: HashMap::new(),
-                }),
+                defs: Some(HashMap::new()),
                 form: Box::new(Form::Discriminator(
                     "foo".to_owned(),
                     [
                         (
                             "a".to_owned(),
                             Schema {
-                                root: None,
+                                defs: None,
                                 form: Box::new(Form::Properties(
                                     HashMap::new(),
                                     HashMap::new(),
@@ -992,7 +836,7 @@ mod tests {
                         (
                             "b".to_owned(),
                             Schema {
-                                root: None,
+                                defs: None,
                                 form: Box::new(Form::Properties(
                                     HashMap::new(),
                                     HashMap::new(),
@@ -1015,7 +859,7 @@ mod tests {
                 "discriminator": {
                     "tag": "foo",
                     "mapping": {
-                        "a": { "type": "null" },
+                        "a": { "type": "boolean" },
                     }
                 },
             }))
@@ -1030,7 +874,7 @@ mod tests {
                     "mapping": {
                         "a": {
                             "properties": {
-                                "foo": { "type": "null" },
+                                "foo": { "type": "boolean" },
                             },
                         },
                     },

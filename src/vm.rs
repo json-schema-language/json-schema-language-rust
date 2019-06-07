@@ -1,39 +1,27 @@
 use crate::errors::JslError;
-use crate::registry::Registry;
 use crate::schema::{Form, Schema, Type};
 use crate::validator::ValidationError;
-use failure::{bail, err_msg, Error};
+use chrono::DateTime;
+use failure::{err_msg, Error};
 use json_pointer::JsonPointer;
 use serde_json::Value;
 use std::borrow::Cow;
-use url::Url;
 
 pub fn validate<'a>(
     max_failures: usize,
     max_depth: usize,
     strict_instance_semantics: bool,
-    registry: &'a Registry,
-    id: &'a Option<Url>,
+    schema: &'a Schema,
     instance: &'a Value,
 ) -> Result<Vec<ValidationError<'a>>, Error> {
-    if !registry.is_sealed() {
-        bail!(JslError::Unsealed);
-    }
-
     let mut vm = Vm {
         max_failures,
         max_depth,
         strict_instance_semantics,
-        registry,
-        instance_tokens: Vec::new(),
-        schemas: vec![(id, vec![])],
-        errors: Vec::new(),
-    };
-
-    let schema = if let Some(schema) = registry.get(id) {
-        schema
-    } else {
-        bail!(JslError::NoSuchSchema);
+        root_schema: schema,
+        instance_tokens: vec![],
+        schema_tokens: vec![vec![]],
+        errors: vec![],
     };
 
     match vm.eval(schema, instance, None) {
@@ -51,9 +39,9 @@ struct Vm<'a> {
     max_failures: usize,
     max_depth: usize,
     strict_instance_semantics: bool,
-    registry: &'a Registry,
+    root_schema: &'a Schema,
     instance_tokens: Vec<Cow<'a, str>>,
-    schemas: Vec<(&'a Option<Url>, Vec<Cow<'a, str>>)>,
+    schema_tokens: Vec<Vec<Cow<'a, str>>>,
     errors: Vec<ValidationError<'a>>,
 }
 
@@ -66,46 +54,17 @@ impl<'a> Vm<'a> {
     ) -> Result<(), EvalError> {
         match schema.form() {
             Form::Empty => {}
-            Form::Ref(ref id, ref def) => {
-                if self.schemas.len() == self.max_depth {
+            Form::Ref(ref def) => {
+                if self.schema_tokens.len() == self.max_depth {
                     return Err(EvalError::Actual(err_msg(JslError::MaxDepthExceeded)));
                 }
 
-                let schema_tokens = def.as_ref().map_or_else(
-                    || vec![],
-                    |def| vec![Cow::Borrowed("definitions"), Cow::Borrowed(def)],
-                );
-
-                let root_schema = self
-                    .registry
-                    .get(id)
-                    .expect("unreachable: ref'd schema not found");
-
-                let root_schema_data = root_schema
-                    .root_data()
-                    .as_ref()
-                    .expect("unreachable: non-root schema in registry");
-
-                let refd_schema = if let Some(def) = def {
-                    root_schema_data
-                        .definitions()
-                        .get(def)
-                        .expect("unreachable: ref'd definition not found")
-                } else {
-                    root_schema
-                };
-
-                self.schemas.push((id, schema_tokens));
+                let refd_schema = &self.root_schema.definitions().as_ref().unwrap()[def];
+                self.schema_tokens
+                    .push(vec!["definitions".into(), def.into()]);
                 self.eval(refd_schema, instance, None)?;
             }
             Form::Type(typ) => match typ {
-                Type::Null => {
-                    if !instance.is_null() {
-                        self.push_schema_token("type");
-                        self.push_err()?;
-                        self.pop_schema_token();
-                    }
-                }
                 Type::Boolean => {
                     if !instance.is_boolean() {
                         self.push_schema_token("type");
@@ -127,7 +86,33 @@ impl<'a> Vm<'a> {
                         self.pop_schema_token();
                     }
                 }
+                Type::Timestamp => {
+                    if let Some(s) = instance.as_str() {
+                        if DateTime::parse_from_rfc3339(s).is_err() {
+                            self.push_schema_token("type");
+                            self.push_err()?;
+                            self.pop_schema_token();
+                        }
+                    } else {
+                        self.push_schema_token("type");
+                        self.push_err()?;
+                        self.pop_schema_token();
+                    }
+                }
             },
+            Form::Enum(ref values) => {
+                if let Some(string) = instance.as_str() {
+                    if !values.contains(string) {
+                        self.push_schema_token("enum");
+                        self.push_err()?;
+                        self.pop_schema_token();
+                    }
+                } else {
+                    self.push_schema_token("enum");
+                    self.push_err()?;
+                    self.pop_schema_token();
+                }
+            }
             Form::Elements(ref sub_schema) => {
                 self.push_schema_token("elements");
                 if let Some(arr) = instance.as_array() {
@@ -170,12 +155,6 @@ impl<'a> Vm<'a> {
                     self.pop_schema_token();
 
                     if self.strict_instance_semantics {
-                        if *has_required {
-                            self.push_schema_token("properties");
-                        } else {
-                            self.push_schema_token("optionalProperties");
-                        }
-
                         for key in obj.keys() {
                             let parent_match = parent_tag.map(|tag| key == tag).unwrap_or(false);
 
@@ -188,8 +167,6 @@ impl<'a> Vm<'a> {
                                 self.pop_instance_token();
                             }
                         }
-
-                        self.pop_schema_token();
                     }
                 } else {
                     // Sort of a weird corner-case in the spec: you have to
@@ -260,18 +237,16 @@ impl<'a> Vm<'a> {
     }
 
     fn push_schema_token<T: Into<Cow<'a, str>>>(&mut self, token: T) {
-        self.schemas
+        self.schema_tokens
             .last_mut()
             .expect("unreachable: empty schema stack")
-            .1
             .push(token.into());
     }
 
     fn pop_schema_token(&mut self) {
-        self.schemas
+        self.schema_tokens
             .last_mut()
             .expect("unreachable: empty schema stack")
-            .1
             .pop();
     }
 
@@ -284,15 +259,15 @@ impl<'a> Vm<'a> {
     }
 
     fn push_err(&mut self) -> Result<(), EvalError> {
-        let (schema_id, schema_path) = self
-            .schemas
+        let schema_path = self
+            .schema_tokens
             .last()
-            .as_ref()
-            .expect("unreachable: empty schema stack");
+            .expect("unreachable: empty schema stack")
+            .clone();
+
         self.errors.push(ValidationError::new(
             JsonPointer::new(self.instance_tokens.clone()),
-            JsonPointer::new(schema_path.clone()),
-            schema_id,
+            JsonPointer::new(schema_path),
         ));
 
         if self.errors.len() == self.max_failures {
