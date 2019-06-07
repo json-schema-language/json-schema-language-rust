@@ -19,7 +19,6 @@ use std::collections::{HashMap, HashSet};
 pub struct Schema {
     defs: Option<HashMap<String, Schema>>,
     form: Box<Form>,
-    extra: HashMap<String, Value>,
 }
 
 impl Schema {
@@ -156,7 +155,6 @@ impl Schema {
         Ok(Self {
             defs: None,
             form: Box::new(form),
-            extra: HashMap::new(),
         })
     }
 
@@ -213,27 +211,6 @@ impl Schema {
     /// Get the form of the schema.
     pub fn form(&self) -> &Form {
         &self.form
-    }
-
-    /// Get the extra data on the schema.
-    ///
-    /// Extra data here refers to key-value pairs on a schema which were present
-    /// on the data, but the keys were not any of the keywords in JSL.
-    ///
-    /// This data is useful if you're implementing custom functionality on top
-    /// of JSL.
-    pub fn extra(&self) -> &HashMap<String, Value> {
-        &self.extra
-    }
-
-    /// Same as [`extra`](#method.extra), but takes a mutable reference.
-    pub fn extra_mut(&mut self) -> &mut HashMap<String, Value> {
-        &mut self.extra
-    }
-
-    /// Same as [`extra`](#method.extra), but moves ownership.
-    pub fn into_extra(self) -> HashMap<String, Value> {
-        self.extra
     }
 }
 
@@ -482,7 +459,6 @@ mod tests {
                         Schema {
                             defs: None,
                             form: Box::new(Form::Type(Type::Boolean)),
-                            extra: HashMap::new(),
                         },
                     )]
                     .iter()
@@ -490,7 +466,6 @@ mod tests {
                     .collect()
                 ),
                 form: Box::new(Form::Empty),
-                extra: HashMap::new()
             }
         );
     }
@@ -502,7 +477,6 @@ mod tests {
             Schema {
                 defs: Some(HashMap::new()),
                 form: Box::new(Form::Empty),
-                extra: HashMap::new(),
             }
         );
     }
@@ -527,7 +501,6 @@ mod tests {
                         Schema {
                             defs: None,
                             form: Box::new(Form::Type(Type::Boolean)),
-                            extra: HashMap::new(),
                         },
                     )]
                     .iter()
@@ -535,7 +508,6 @@ mod tests {
                     .collect()
                 ),
                 form: Box::new(Form::Ref("a".to_owned())),
-                extra: HashMap::new(),
             }
         );
 
@@ -564,7 +536,6 @@ mod tests {
             Schema {
                 defs: Some(HashMap::new()),
                 form: Box::new(Form::Type(Type::Boolean)),
-                extra: HashMap::new(),
             },
         );
 
@@ -579,7 +550,6 @@ mod tests {
             Schema {
                 defs: Some(HashMap::new()),
                 form: Box::new(Form::Type(Type::Number)),
-                extra: HashMap::new(),
             },
         );
 
@@ -594,7 +564,6 @@ mod tests {
             Schema {
                 defs: Some(HashMap::new()),
                 form: Box::new(Form::Type(Type::String)),
-                extra: HashMap::new(),
             },
         );
 
@@ -609,7 +578,6 @@ mod tests {
             Schema {
                 defs: Some(HashMap::new()),
                 form: Box::new(Form::Type(Type::Timestamp)),
-                extra: HashMap::new(),
             },
         );
 
@@ -640,7 +608,6 @@ mod tests {
                         .cloned()
                         .collect()
                 )),
-                extra: HashMap::new(),
             },
         );
 
@@ -678,9 +645,7 @@ mod tests {
                 form: Box::new(Form::Elements(Schema {
                     defs: None,
                     form: Box::new(Form::Type(Type::Boolean)),
-                    extra: HashMap::new(),
                 })),
-                extra: HashMap::new(),
             }
         );
     }
@@ -708,7 +673,6 @@ mod tests {
                         Schema {
                             defs: None,
                             form: Box::new(Form::Type(Type::Boolean)),
-                            extra: HashMap::new(),
                         }
                     )]
                     .iter()
@@ -719,7 +683,6 @@ mod tests {
                         Schema {
                             defs: None,
                             form: Box::new(Form::Type(Type::Boolean)),
-                            extra: HashMap::new(),
                         }
                     )]
                     .iter()
@@ -727,7 +690,6 @@ mod tests {
                     .collect(),
                     true,
                 )),
-                extra: HashMap::new(),
             }
         );
 
@@ -750,7 +712,6 @@ mod tests {
                         Schema {
                             defs: None,
                             form: Box::new(Form::Type(Type::Boolean)),
-                            extra: HashMap::new(),
                         }
                     )]
                     .iter()
@@ -758,7 +719,6 @@ mod tests {
                     .collect(),
                     false,
                 )),
-                extra: HashMap::new(),
             }
         );
 
@@ -793,9 +753,7 @@ mod tests {
                 form: Box::new(Form::Values(Schema {
                     defs: None,
                     form: Box::new(Form::Type(Type::Boolean)),
-                    extra: HashMap::new(),
                 })),
-                extra: HashMap::new(),
             }
         );
     }
@@ -830,7 +788,6 @@ mod tests {
                                     HashMap::new(),
                                     true
                                 )),
-                                extra: HashMap::new(),
                             }
                         ),
                         (
@@ -842,7 +799,6 @@ mod tests {
                                     HashMap::new(),
                                     true
                                 )),
-                                extra: HashMap::new(),
                             }
                         )
                     ]
@@ -850,7 +806,6 @@ mod tests {
                     .cloned()
                     .collect(),
                 )),
-                extra: HashMap::new(),
             }
         );
 
