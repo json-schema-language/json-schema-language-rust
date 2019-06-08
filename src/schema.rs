@@ -214,6 +214,15 @@ impl Schema {
     pub fn form(&self) -> &Form {
         &self.form
     }
+
+    /// Get extra data associated with this schema.
+    ///
+    /// Essentially, this function returns a JSON object of properties that
+    /// aren't JSL keywords, but which were included in the schema's JSON. You
+    /// might use these nonstandard fields to implement custom behavior.
+    pub fn extra(&self) -> &HashMap<String, Value> {
+        &self.extra
+    }
 }
 
 /// The various forms which a schema may take on, and their respective data.
