@@ -1,6 +1,6 @@
 [package]
 name = "jsl"
-version = "0.2.3"
+version = "0.2.4"
 description = "JSON Schema Language validator and utilities."
 license = "MIT"
 documentation = "https://docs.rs/jsl"
