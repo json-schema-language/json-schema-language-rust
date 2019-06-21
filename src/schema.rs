@@ -235,19 +235,24 @@ impl Schema {
                 out.enm = Some(vals.into_iter().collect());
             }
             Form::Elements(sub_schema) => out.elems = Some(Box::new(sub_schema.into_serde())),
-            Form::Properties(required, optional, _) => {
-                out.props = Some(
-                    required
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into_serde()))
-                        .collect(),
-                );
-                out.opt_props = Some(
-                    optional
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into_serde()))
-                        .collect(),
-                );
+            Form::Properties(required, optional, has_required) => {
+                if has_required || !required.is_empty() {
+                    out.props = Some(
+                        required
+                            .into_iter()
+                            .map(|(k, v)| (k, v.into_serde()))
+                            .collect(),
+                    );
+                }
+
+                if !has_required || !optional.is_empty() {
+                    out.opt_props = Some(
+                        optional
+                            .into_iter()
+                            .map(|(k, v)| (k, v.into_serde()))
+                            .collect(),
+                    );
+                }
             }
             Form::Values(sub_schema) => out.values = Some(Box::new(sub_schema.into_serde())),
             Form::Discriminator(tag, mapping) => {
