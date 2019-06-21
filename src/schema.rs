@@ -23,6 +23,21 @@ pub struct Schema {
 }
 
 impl Schema {
+    /// Construct a new schema from its constituent parts.
+    ///
+    /// `defs` should be present (i.e. not `None`) if and only if the
+    /// constructed schema is a root one. This invariant is not enforced, but
+    /// many users of this crate will presume that root schemas have definitions
+    /// they can unwrap. Likewise, some tooling will assume that any schema
+    /// which has non-`None` definitions are root schemas.
+    pub fn from_parts(
+        defs: Option<HashMap<String, Schema>>,
+        form: Box<Form>,
+        extra: HashMap<String, Value>,
+    ) -> Schema {
+        Schema { defs, form, extra }
+    }
+
     /// Construct a new, root schema from a `Serde`.
     pub fn from_serde(mut serde_schema: Serde) -> Result<Self, Error> {
         let mut defs = HashMap::new();
@@ -195,10 +210,65 @@ impl Schema {
         Ok(())
     }
 
+    /// Convert this schema into a `Serde`.
+    pub fn into_serde(self) -> Serde {
+        let mut out = Serde::default();
+
+        match *self.form {
+            Form::Empty => {}
+            Form::Ref(def) => {
+                out.rxf = Some(def);
+            }
+            Form::Type(Type::Boolean) => {
+                out.typ = Some("boolean".to_owned());
+            }
+            Form::Type(Type::Number) => {
+                out.typ = Some("number".to_owned());
+            }
+            Form::Type(Type::String) => {
+                out.typ = Some("string".to_owned());
+            }
+            Form::Type(Type::Timestamp) => {
+                out.typ = Some("timestamp".to_owned());
+            }
+            Form::Enum(vals) => {
+                out.enm = Some(vals.into_iter().collect());
+            }
+            Form::Elements(sub_schema) => out.elems = Some(Box::new(sub_schema.into_serde())),
+            Form::Properties(required, optional, _) => {
+                out.props = Some(
+                    required
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into_serde()))
+                        .collect(),
+                );
+                out.opt_props = Some(
+                    optional
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into_serde()))
+                        .collect(),
+                );
+            }
+            Form::Values(sub_schema) => out.values = Some(Box::new(sub_schema.into_serde())),
+            Form::Discriminator(tag, mapping) => {
+                out.discriminator = Some(SerdeDiscriminator {
+                    tag,
+                    mapping: mapping
+                        .into_iter()
+                        .map(|(k, v)| (k, v.into_serde()))
+                        .collect(),
+                });
+            }
+        }
+
+        out.extra = self.extra;
+        out
+    }
+
     /// Is this schema a root schema?
     ///
     /// Under the hood, this is entirely equivalent to checking whether
-    /// `defs().is_some()`.
+    /// `definitions().is_some()`.
     pub fn is_root(&self) -> bool {
         self.defs.is_some()
     }
