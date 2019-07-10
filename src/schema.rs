@@ -74,6 +74,16 @@ impl Schema {
             form = Form::Type(match typ.as_ref() {
                 "boolean" => Type::Boolean,
                 "number" => Type::Number,
+                "float32" => Type::Float32,
+                "float64" => Type::Float64,
+                "int8" => Type::Int8,
+                "uint8" => Type::Uint8,
+                "int16" => Type::Int16,
+                "uint16" => Type::Uint16,
+                "int32" => Type::Int32,
+                "uint32" => Type::Uint32,
+                "int64" => Type::Int64,
+                "uint64" => Type::Uint64,
                 "string" => Type::String,
                 "timestamp" => Type::Timestamp,
                 _ => bail!(JslError::InvalidForm),
@@ -224,6 +234,36 @@ impl Schema {
             }
             Form::Type(Type::Number) => {
                 out.typ = Some("number".to_owned());
+            }
+            Form::Type(Type::Float32) => {
+                out.typ = Some("float32".to_owned());
+            }
+            Form::Type(Type::Float64) => {
+                out.typ = Some("float64".to_owned());
+            }
+            Form::Type(Type::Int8) => {
+                out.typ = Some("int8".to_owned());
+            }
+            Form::Type(Type::Uint8) => {
+                out.typ = Some("uint8".to_owned());
+            }
+            Form::Type(Type::Int16) => {
+                out.typ = Some("int16".to_owned());
+            }
+            Form::Type(Type::Uint16) => {
+                out.typ = Some("uint16".to_owned());
+            }
+            Form::Type(Type::Int32) => {
+                out.typ = Some("int32".to_owned());
+            }
+            Form::Type(Type::Uint32) => {
+                out.typ = Some("uint32".to_owned());
+            }
+            Form::Type(Type::Int64) => {
+                out.typ = Some("int64".to_owned());
+            }
+            Form::Type(Type::Uint64) => {
+                out.typ = Some("uint64".to_owned());
             }
             Form::Type(Type::String) => {
                 out.typ = Some("string".to_owned());
@@ -379,6 +419,38 @@ pub enum Type {
     /// Note that JSON only has one kind of number, and JSON numbers may have a
     /// decimal part.
     Number,
+
+    /// A floating-point number. This validates just like `Number`, but signals
+    /// the intention that the data is meant to be a single-precision float.
+    Float32,
+
+    /// A floating-point number. This validates just like `Number`, but signals
+    /// the intention that the data is meant to be a double-precision float.
+    Float64,
+
+    /// An integer in the range covered by `i8`.
+    Int8,
+
+    /// An integer in the range covered by `u8`.
+    Uint8,
+
+    /// An integer in the range covered by `i16`.
+    Int16,
+
+    /// An integer in the range covered by `u16`.
+    Uint16,
+
+    /// An integer in the range covered by `i32`.
+    Int32,
+
+    /// An integer in the range covered by `u32`.
+    Uint32,
+
+    /// An integer in the range covered by `i64`.
+    Int64,
+
+    /// An integer in the range covered by `u64`.
+    Uint64,
 
     /// Any JSON string.
     String,

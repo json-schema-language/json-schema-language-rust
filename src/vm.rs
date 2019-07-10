@@ -72,12 +72,36 @@ impl<'a> Vm<'a> {
                         self.pop_schema_token();
                     }
                 }
-                Type::Number => {
+                Type::Number | Type::Float32 | Type::Float64 => {
                     if !instance.is_number() {
                         self.push_schema_token("type");
                         self.push_err()?;
                         self.pop_schema_token();
                     }
+                }
+                Type::Int8 => {
+                    self.check_int(instance, -128.0, 127.0)?;
+                }
+                Type::Uint8 => {
+                    self.check_int(instance, 0.0, 255.0)?;
+                }
+                Type::Int16 => {
+                    self.check_int(instance, -32768.0, 32767.0)?;
+                }
+                Type::Uint16 => {
+                    self.check_int(instance, 0.0, 65535.0)?;
+                }
+                Type::Int32 => {
+                    self.check_int(instance, -2147483648.0, 2147483647.0)?;
+                }
+                Type::Uint32 => {
+                    self.check_int(instance, 0.0, 4294967295.0)?;
+                }
+                Type::Int64 => {
+                    self.check_int(instance, -9223372036854775808.0, 9223372036854775807.0)?;
+                }
+                Type::Uint64 => {
+                    self.check_int(instance, 0.0, 18446744073709551615.0)?;
                 }
                 Type::String => {
                     if !instance.is_string() {
@@ -231,6 +255,22 @@ impl<'a> Vm<'a> {
                     self.push_err()?;
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    fn check_int(&mut self, instance: &Value, min: f64, max: f64) -> Result<(), EvalError> {
+        if let Some(n) = instance.as_f64() {
+            if n.fract() != 0.0 || n < min || n > max {
+                self.push_schema_token("type");
+                self.push_err()?;
+                self.pop_schema_token();
+            }
+        } else {
+            self.push_schema_token("type");
+            self.push_err()?;
+            self.pop_schema_token();
         }
 
         Ok(())
