@@ -34,7 +34,7 @@ data:
 
 ```rust
 use serde_json::json;
-use jsl::{Registry, Schema, SerdeSchema, Validator, ValidationError};
+use jsl::{Schema, SerdeSchema, Validator, ValidationError};
 use failure::Error;
 use std::collections::HashSet;
 
@@ -59,19 +59,11 @@ fn main() -> Result<(), Error> {
     // checks.
     let demo_schema = Schema::from_serde(demo_schema).unwrap();
 
-    // A registry is a bundle of schemas that can cross-reference one
-    // another. When you add a SerdeSchema to a Registry, the Registry will
-    // return the URIs of all schemas still missing from the Registry.
-    let mut registry = Registry::new();
-    let missing_uris = registry.register(demo_schema)?;
-
-    // Our schema doesn't use references, so we're not expecting any
-    // dangling references to other schemas.
-    assert!(missing_uris.is_empty());
-
-    // Once you've registered all your schemas, you can efficiently begin
-    // processing as many inputs as desired.
-    let validator = Validator::new(&registry);
+    // Validator can quickly check if an instance satisfies some schema.
+    // With the new_with_config constructor, you can configure how many
+    // errors to return, and how to handle the possibility of a
+    // circularly-defined schema.
+    let validator = Validator::new();
     let input_ok = json!({
         "name": "John Doe",
         "age": 43,
@@ -81,7 +73,7 @@ fn main() -> Result<(), Error> {
         ]
     });
 
-    let validation_errors_ok = validator.validate(&input_ok)?;
+    let validation_errors_ok = validator.validate(&demo_schema, &input_ok)?;
     assert!(validation_errors_ok.is_empty());
 
     let input_bad = json!({
@@ -97,7 +89,7 @@ fn main() -> Result<(), Error> {
     //
     // For testing purposes, we'll sort the errors so that their order is
     // predictable.
-    let mut validation_errors_bad = validator.validate(&input_bad)?;
+    let mut validation_errors_bad = validator.validate(&demo_schema, &input_bad)?;
     validation_errors_bad.sort_by_key(|err| err.instance_path().to_string());
     assert_eq!(validation_errors_bad.len(), 3);
 
