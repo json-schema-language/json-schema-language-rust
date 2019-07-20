@@ -63,6 +63,7 @@ impl<'a> Vm<'a> {
                 self.schema_tokens
                     .push(vec!["definitions".into(), def.into()]);
                 self.eval(refd_schema, instance, None)?;
+                self.schema_tokens.pop();
             }
             Form::Type(typ) => match typ {
                 Type::Boolean => {
